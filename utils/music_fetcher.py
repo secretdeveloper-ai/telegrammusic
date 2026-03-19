@@ -1,7 +1,6 @@
 import yt_dlp
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
-import re
 from typing import Optional, Dict, List
 import logging
 
@@ -22,9 +21,13 @@ class MusicFetcher:
             "no_warnings": True,
             "default_search": "ytsearch",
             "socket_timeout": 30,
+            "extractor_args": {"youtube": {"skip": ["dash", "hls"]}},
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
         }
 
-        # Initialize Spotify client if credentials provided
         if SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET:
             auth_manager = SpotifyClientCredentials(
                 client_id=SPOTIFY_CLIENT_ID,
@@ -38,11 +41,12 @@ class MusicFetcher:
     async def search_youtube(self, query: str) -> Optional[Dict]:
         """Search and fetch song from YouTube"""
         try:
+            search_query = f"ytsearch:{query}"
             with yt_dlp.YoutubeDL(self.yt_dlp_opts) as ydl:
-                info = ydl.extract_info(query, download=False)
+                info = ydl.extract_info(search_query, download=False)
 
-                if isinstance(info, list) and len(info) > 0:
-                    info = info[0]
+                if "entries" in info:
+                    info = info["entries"][0]
 
                 duration = info.get("duration", 0)
                 if duration > MAX_SONG_DURATION:
@@ -51,6 +55,7 @@ class MusicFetcher:
                 return {
                     "title": info.get("title", "Unknown"),
                     "url": info.get("url", ""),
+                    "webpage_url": info.get("webpage_url", ""),
                     "duration": duration,
                     "thumbnail": info.get("thumbnail", ""),
                     "source": "YouTube",
@@ -78,10 +83,8 @@ class MusicFetcher:
             if duration > MAX_SONG_DURATION:
                 return None
 
-            # Get preview URL or search YouTube for the track
             preview_url = track.get("preview_url")
             if not preview_url:
-                # Fall back to YouTube search
                 artists = ", ".join([artist["name"] for artist in track.get("artists", [])])
                 youtube_result = await self.search_youtube(
                     f"{track['name']} {artists}"
@@ -89,7 +92,7 @@ class MusicFetcher:
                 if youtube_result:
                     return {
                         **youtube_result,
-                        "source": "Spotify→YouTube",
+                        "source": "Spotify+YouTube",
                         "spotify_id": track.get("id", ""),
                     }
                 return None
@@ -113,7 +116,6 @@ class MusicFetcher:
         elif source == "spotify":
             return await self.search_spotify(query)
         elif source == "both":
-            # Try Spotify first, then YouTube
             result = await self.search_spotify(query)
             if not result:
                 result = await self.search_youtube(query)
@@ -131,7 +133,7 @@ class MusicFetcher:
                 info = ydl.extract_info(playlist_url, download=False)
                 songs = []
 
-                for entry in info.get("entries", [])[:20]:  # Limit to 20 songs
+                for entry in info.get("entries", [])[:20]:
                     song_result = await self.search_youtube(entry.get("url"))
                     if song_result:
                         songs.append(song_result)
