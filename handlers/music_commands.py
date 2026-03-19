@@ -1,4 +1,6 @@
 import logging
+import asyncio
+import random
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from telegram.constants import ChatAction
@@ -6,7 +8,10 @@ from telegram.constants import ChatAction
 from utils.music_fetcher import MusicFetcher
 from utils.mongo_queue_manager import MongoQueueManager
 from utils.claude_assistant import GPTAssistant
-from utils.voice_chat import join_and_play, leave_voice_chat, pause_voice_chat, resume_voice_chat, get_now_playing
+from utils.voice_chat import (
+    voice_play, voice_skip, voice_pause, voice_resume,
+    voice_leave, get_now_playing, is_voice_available
+)
 
 logger = logging.getLogger(__name__)
 music_fetcher = MusicFetcher()
@@ -15,41 +20,53 @@ gpt_assistant = GPTAssistant()
 
 DEV_URL = "tg://resolve?domain=secret_fetcher"
 
-
-def dev_button():
-    return InlineKeyboardButton("👨‍💻 Developer", url=DEV_URL)
-
-
-def fmt_dur(seconds) -> str:
-    if not seconds:
-        return "0:00"
-    s = int(seconds)
-    return f"{s // 60}:{s % 60:02d}"
+# Auto reactions for music events
+PLAY_REACTIONS = ["🎵", "🎶", "🎸", "🔥", "✨", "💫", "🎤", "🎧"]
+SKIP_REACTIONS = ["⏭", "👋", "🔄"]
+ADDED_REACTIONS = ["✅", "🎵", "💯", "🔥"]
 
 
-def safe_md(text: str) -> str:
-    special = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
-    for ch in special:
-        text = text.replace(ch, f'\\{ch}')
+def dev_btn():
+    return InlineKeyboardButton("👨‍💻 ᴅᴇᴠ", url=DEV_URL)
+
+
+def fmt(s) -> str:
+    if not s: return "0:00"
+    s = int(s)
+    return f"{s//60}:{s%60:02d}"
+
+
+def esc(text: str) -> str:
+    for c in ['_','*','[',']','(',')','>','#','+','-','=','|','{','}','.','!','~','`']:
+        text = text.replace(c, f'\\{c}')
     return text
 
 
+async def auto_react(update: Update, emoji: str):
+    """Add auto reaction to message"""
+    try:
+        await update.message.set_reaction(emoji)
+    except Exception:
+        pass
+
+
 async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Play a song - adds to queue AND streams in voice chat"""
     user = update.effective_user
-    user_name = user.first_name
+    chat_id = update.effective_chat.id
 
     if not context.args:
         keyboard = [
-            [InlineKeyboardButton("🎵 ᴛʀʏ ᴘʟᴀʏɪɴɢ", switch_inline_query_current_chat="/play ")],
-            [dev_button()],
+            [
+                InlineKeyboardButton("🎵 ᴘʟᴀʏ sᴏɴɢ", switch_inline_query_current_chat="/play "),
+                InlineKeyboardButton("📋 ǫᴜᴇᴜᴇ", callback_data="mc_queue"),
+            ],
+            [dev_btn()],
         ]
         await update.message.reply_text(
-            f"🎵 *ʜᴇʏ {safe_md(user_name)}\\!*\n\n"
+            f"🎵 *ʜᴇʏ [{esc(user.first_name)}](tg://user?id={user.id})\\!*\n\n"
             "ᴜsᴀɢᴇ: `/play song name`\n\n"
-            "*ᴇxᴀᴍᴘʟᴇs:*\n"
             "• `/play Tum Hi Aana`\n"
-            "• `/play Shape of You`\n"
+            "• `/play Kesariya`\n"
             "• `/play Humsafar`",
             parse_mode="MarkdownV2",
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -57,11 +74,13 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     query = " ".join(context.args)
-    chat_id = update.effective_chat.id
     await update.message.chat.send_action(ChatAction.TYPING)
 
-    search_msg = await update.message.reply_text(
-        f"🔍 *sᴇᴀʀᴄʜɪɴɢ:* `{safe_md(query)}`\\.\\.\\.",
+    # Auto react with random emoji
+    asyncio.create_task(auto_react(update, random.choice(["🔍", "🎵", "⏳"])))
+
+    msg = await update.message.reply_text(
+        f"🔍 *sᴇᴀʀᴄʜɪɴɢ* `{esc(query)}`\\.\\.\\.",
         parse_mode="MarkdownV2"
     )
 
@@ -71,57 +90,49 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not song_data:
         keyboard = [
             [InlineKeyboardButton("🔁 ᴛʀʏ ᴀɢᴀɪɴ", switch_inline_query_current_chat="/play ")],
-            [dev_button()],
+            [dev_btn()],
         ]
-        await search_msg.edit_text(
-            f"❌ *ɴᴏᴛ ғᴏᴜɴᴅ:* `{safe_md(query)}`\n\n"
-            "💡 *ᴛɪᴘs:*\n"
-            "┣ ᴄʜᴇᴄᴋ sᴘᴇʟʟɪɴɢ\n"
-            "┣ ᴀᴅᴅ ᴀʀᴛɪsᴛ ɴᴀᴍᴇ\n"
-            "┗ ᴛʀʏ ᴇɴɢʟɪsʜ ɴᴀᴍᴇ",
+        await msg.edit_text(
+            f"❌ *ɴᴏᴛ ғᴏᴜɴᴅ:* `{esc(query)}`\n\n"
+            "💡 ᴛɪᴘs: ᴀᴅᴅ ᴀʀᴛɪsᴛ ɴᴀᴍᴇ",
             parse_mode="MarkdownV2",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
 
-    # Add to queue
-    requester_id = user.id
-    added = await queue_manager.add_song(chat_id, song_data, requester_id)
-
-    title = song_data.get("title", "Unknown")
-    duration = song_data.get("duration", 0)
-    duration_str = fmt_dur(duration)
-    queue_length = await queue_manager.get_queue_length(chat_id)
-    webpage_url = song_data.get("webpage_url", "")
-    source = song_data.get("source", "Unknown")
+    added = await queue_manager.add_song(chat_id, song_data, user.id)
 
     if not added:
         keyboard = [
-            [
-                InlineKeyboardButton("⏭ sᴋɪᴘ", callback_data="mc_skip"),
-                InlineKeyboardButton("🗑 ᴄʟᴇᴀʀ", callback_data="mc_clear"),
-            ],
-            [dev_button()],
+            [InlineKeyboardButton("⏭ sᴋɪᴘ", callback_data="mc_skip"), InlineKeyboardButton("🗑 ᴄʟᴇᴀʀ", callback_data="mc_clear")],
+            [dev_btn()],
         ]
-        await search_msg.edit_text(
-            "❌ *ǫᴜᴇᴜᴇ ɪs ғᴜʟʟ\\!*",
-            parse_mode="MarkdownV2",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        await msg.edit_text("❌ *ǫᴜᴇᴜᴇ ɪs ғᴜʟʟ\\!*", parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    # Try to play in voice chat
-    vc_result = await join_and_play(chat_id, query, song_data)
-    vc_status = ""
-    if vc_result["success"]:
-        vc_status = "\n🔊 *ᴘʟᴀʏɪɴɢ ɪɴ ᴠᴏɪᴄᴇ ᴄʜᴀᴛ\\!*"
+    title = song_data.get("title", "Unknown")
+    duration = song_data.get("duration", 0)
+    dur_str = fmt(duration)
+    q_len = await queue_manager.get_queue_length(chat_id)
+    source = song_data.get("source", "")
+    webpage = song_data.get("webpage_url", "")
+
+    # Try voice chat
+    vc_text = ""
+    if is_voice_available():
+        vc = await voice_play(chat_id, query, song_data)
+        if vc["success"]:
+            vc_text = "\n🔊 *ᴘʟᴀʏɪɴɢ ɪɴ ᴠᴏɪᴄᴇ ᴄʜᴀᴛ\\!*"
+            asyncio.create_task(auto_react(update, random.choice(PLAY_REACTIONS)))
+        else:
+            vc_text = f"\n⚠️ _{esc(vc.get('msg','VC unavailable'))}_"
     else:
-        vc_status = f"\n⚠️ _{safe_md(vc_result['msg'])}_"
+        asyncio.create_task(auto_react(update, random.choice(ADDED_REACTIONS)))
 
     keyboard = [
         [
-            InlineKeyboardButton("⏭ sᴋɪᴘ", callback_data="mc_skip"),
             InlineKeyboardButton("⏸ ᴘᴀᴜsᴇ", callback_data="mc_pause"),
+            InlineKeyboardButton("⏭ sᴋɪᴘ", callback_data="mc_skip"),
             InlineKeyboardButton("▶️ ʀᴇsᴜᴍᴇ", callback_data="mc_resume"),
         ],
         [
@@ -130,82 +141,87 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🗑 ᴄʟᴇᴀʀ", callback_data="mc_clear"),
         ],
         [
-            InlineKeyboardButton("🔇 ʟᴇᴀᴠᴇ ᴠᴄ", callback_data="mc_leave_vc"),
+            InlineKeyboardButton("🔇 ʟᴇᴀᴠᴇ ᴠᴄ", callback_data="mc_leave"),
             InlineKeyboardButton("➕ ᴀᴅᴅ ᴍᴏʀᴇ", switch_inline_query_current_chat="/play "),
         ],
     ]
-    if webpage_url:
-        keyboard.append([InlineKeyboardButton("🔗 ᴏᴘᴇɴ sᴏɴɢ", url=webpage_url)])
-    keyboard.append([dev_button()])
+    if webpage:
+        keyboard.append([InlineKeyboardButton("🔗 ᴏᴘᴇɴ sᴏɴɢ", url=webpage)])
+    keyboard.append([dev_btn()])
 
-    await search_msg.edit_text(
-        f"✅ *ᴀᴅᴅᴇᴅ ᴛᴏ ǫᴜᴇᴜᴇ\\!*{vc_status}\n\n"
-        f"🎵 *{safe_md(title[:65])}*\n"
-        f"⏱ ᴅᴜʀᴀᴛɪᴏɴ ➤ `{duration_str}`\n"
-        f"📍 sᴏᴜʀᴄᴇ ➤ {safe_md(source)}\n"
-        f"📊 ᴘᴏsɪᴛɪᴏɴ ➤ \\#{queue_length}\n"
-        f"👤 ʙʏ ➤ [{safe_md(user_name)}](tg://user?id={user.id})",
-        parse_mode="MarkdownV2",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-
-async def play_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    group_id = update.effective_chat.id
-    next_song = await queue_manager.peek_next_song(group_id)
-    if not next_song:
-        await update.message.reply_text("🎵 *ǫᴜᴇᴜᴇ ɪs ᴇᴍᴘᴛʏ\\!*", parse_mode="MarkdownV2")
-        return
-    title = next_song.get("title", "Unknown")
-    duration_str = fmt_dur(next_song.get("duration", 0))
-    keyboard = [[
-        InlineKeyboardButton("⏭ sᴋɪᴘ ᴛᴏ ᴛʜɪs", callback_data="mc_skip"),
-        InlineKeyboardButton("📋 ғᴜʟʟ ǫᴜᴇᴜᴇ", callback_data="mc_queue"),
-    ], [dev_button()]]
-    await update.message.reply_text(
-        f"▶️ *ɴᴇxᴛ sᴏɴɢ:*\n\n🎵 *{safe_md(title[:65])}*\n⏱ `{duration_str}`",
+    await msg.edit_text(
+        f"✅ *ᴀᴅᴅᴇᴅ ᴛᴏ ǫᴜᴇᴜᴇ\\!*{vc_text}\n\n"
+        f"🎵 *{esc(title[:65])}*\n"
+        f"⏱ ᴅᴜʀᴀᴛɪᴏɴ ➤ `{dur_str}`\n"
+        f"📍 sᴏᴜʀᴄᴇ ➤ {esc(source)}\n"
+        f"📊 ᴘᴏsɪᴛɪᴏɴ ➤ \\#{q_len}\n"
+        f"👤 ʙʏ ➤ [{esc(user.first_name)}](tg://user?id={user.id})",
         parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
 async def skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    group_id = update.effective_chat.id
-    next_song = await queue_manager.get_next_song(group_id)
+    chat_id = update.effective_chat.id
+    next_song = await queue_manager.get_next_song(chat_id)
+
     if not next_song:
         await update.message.reply_text("🎵 *ǫᴜᴇᴜᴇ ɪs ᴇᴍᴘᴛʏ\\!*", parse_mode="MarkdownV2")
         return
 
     title = next_song.get("title", "Unknown")
-    duration_str = fmt_dur(next_song.get("duration", 0))
+    dur_str = fmt(next_song.get("duration", 0))
 
-    # Play next in voice chat
-    vc_result = await join_and_play(group_id, title, next_song)
-    vc_status = "🔊 *ᴘʟᴀʏɪɴɢ ɪɴ ᴠᴄ\\!*" if vc_result["success"] else f"_{safe_md(vc_result['msg'])}_"
+    vc_text = ""
+    if is_voice_available():
+        vc = await voice_play(chat_id, title, next_song)
+        vc_text = "\n🔊 *ᴘʟᴀʏɪɴɢ\\!*" if vc["success"] else f"\n_{esc(vc.get('msg',''))}_"
 
-    keyboard = [[
-        InlineKeyboardButton("⏭ sᴋɪᴘ ᴀɢᴀɪɴ", callback_data="mc_skip"),
-        InlineKeyboardButton("📋 ǫᴜᴇᴜᴇ", callback_data="mc_queue"),
-    ], [dev_button()]]
+    asyncio.create_task(auto_react(update, random.choice(SKIP_REACTIONS)))
+
+    keyboard = [
+        [InlineKeyboardButton("⏭ sᴋɪᴘ ᴀɢᴀɪɴ", callback_data="mc_skip"), InlineKeyboardButton("📋 ǫᴜᴇᴜᴇ", callback_data="mc_queue")],
+        [dev_btn()],
+    ]
     await update.message.reply_text(
-        f"⏭️ *sᴋɪᴘᴘᴇᴅ\\!* {vc_status}\n\n🎵 *{safe_md(title[:65])}*\n⏱ `{duration_str}`",
+        f"⏭️ *sᴋɪᴘᴘᴇᴅ\\!*{vc_text}\n\n🎵 *{esc(title[:65])}*\n⏱ `{dur_str}`",
         parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
+async def play_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    now = get_now_playing(chat_id)
+    next_s = await queue_manager.peek_next_song(chat_id)
+
+    text = ""
+    if now:
+        text += f"🔊 *ɴᴏᴡ ᴘʟᴀʏɪɴɢ:*\n🎵 *{esc(now.get('title','')[:50])}*\n\n"
+    if next_s:
+        text += f"▶️ *ɴᴇxᴛ:*\n🎵 *{esc(next_s.get('title','')[:50])}*\n⏱ `{fmt(next_s.get('duration',0))}`"
+    else:
+        text += "📭 *ǫᴜᴇᴜᴇ ɪs ᴇᴍᴘᴛʏ*"
+
+    keyboard = [
+        [InlineKeyboardButton("⏭ sᴋɪᴘ", callback_data="mc_skip"), InlineKeyboardButton("📋 ǫᴜᴇᴜᴇ", callback_data="mc_queue")],
+        [dev_btn()],
+    ]
+    await update.message.reply_text(text, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
 async def queue_display(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    group_id = update.effective_chat.id
-    queue = await queue_manager.get_queue(group_id)
-    now = get_now_playing(group_id)
+    chat_id = update.effective_chat.id
+    queue = await queue_manager.get_queue(chat_id)
+    now = get_now_playing(chat_id)
 
     if not queue and not now:
         keyboard = [
-            [InlineKeyboardButton("🎵 ᴘʟᴀʏ ᴀ sᴏɴɢ", switch_inline_query_current_chat="/play ")],
-            [dev_button()],
+            [InlineKeyboardButton("🎵 ᴘʟᴀʏ sᴏɴɢ", switch_inline_query_current_chat="/play ")],
+            [dev_btn()],
         ]
         await update.message.reply_text(
-            "📋 *ǫᴜᴇᴜᴇ ɪs ᴇᴍᴘᴛʏ\\!*",
+            "📭 *ǫᴜᴇᴜᴇ ɪs ᴇᴍᴘᴛʏ\\!*\n\n`/play song name` ᴛᴏ ᴀᴅᴅ sᴏɴɢs",
             parse_mode="MarkdownV2",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
@@ -213,38 +229,40 @@ async def queue_display(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = ""
     if now:
-        text += f"🔊 *ɴᴏᴡ ᴘʟᴀʏɪɴɢ:*\n🎵 {safe_md(now['title'][:45])}\n\n"
+        text += f"🔊 *ɴᴏᴡ ᴘʟᴀʏɪɴɢ:*\n🎵 {esc(now.get('title','')[:45])}\n\n"
 
     if queue:
-        text += f"📋 *ǫᴜᴇᴜᴇ — {len(queue)} sᴏɴɢs*\n\n"
-        for i, song in enumerate(queue[:10], 1):
-            title = safe_md(song.get("title", "Unknown")[:38])
-            dur = fmt_dur(song.get("duration", 0))
-            text += f"`{i}.` {title} ┃ `{dur}`\n"
+        text += f"📋 *ǫᴜᴇᴜᴇ — {len(queue)} sᴏɴɢ{'s' if len(queue)>1 else ''}*\n\n"
+        for i, s in enumerate(queue[:10], 1):
+            t = esc(s.get("title","Unknown")[:35])
+            d = fmt(s.get("duration",0))
+            text += f"`{i}.` {t} ┃ `{d}`\n"
         if len(queue) > 10:
-            text += f"\n_\\+{len(queue) - 10} ᴍᴏʀᴇ_"
+            text += f"\n_\\+{len(queue)-10} ᴍᴏʀᴇ_"
 
     keyboard = [
         [
-            InlineKeyboardButton("⏭ sᴋɪᴘ", callback_data="mc_skip"),
             InlineKeyboardButton("⏸ ᴘᴀᴜsᴇ", callback_data="mc_pause"),
-            InlineKeyboardButton("🔀 sʜᴜғғʟᴇ", callback_data="mc_shuffle"),
+            InlineKeyboardButton("⏭ sᴋɪᴘ", callback_data="mc_skip"),
+            InlineKeyboardButton("▶️ ʀᴇsᴜᴍᴇ", callback_data="mc_resume"),
         ],
         [
-            InlineKeyboardButton("🔇 ʟᴇᴀᴠᴇ ᴠᴄ", callback_data="mc_leave_vc"),
+            InlineKeyboardButton("🔀 sʜᴜғғʟᴇ", callback_data="mc_shuffle"),
             InlineKeyboardButton("🗑 ᴄʟᴇᴀʀ", callback_data="mc_clear"),
+            InlineKeyboardButton("🔇 ʟᴇᴀᴠᴇ ᴠᴄ", callback_data="mc_leave"),
         ],
-        [dev_button()],
+        [InlineKeyboardButton("➕ ᴀᴅᴅ sᴏɴɢ", switch_inline_query_current_chat="/play "), dev_btn()],
     ]
     await update.message.reply_text(text, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 async def clear_queue_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    group_id = update.effective_chat.id
-    count = await queue_manager.clear_queue(group_id)
+    chat_id = update.effective_chat.id
+    count = await queue_manager.clear_queue(chat_id)
+    await voice_leave(chat_id)
+    asyncio.create_task(auto_react(update, "🗑"))
     keyboard = [
-        [InlineKeyboardButton("🎵 ᴘʟᴀʏ ɴᴇᴡ", switch_inline_query_current_chat="/play ")],
-        [dev_button()],
+        [InlineKeyboardButton("🎵 ᴘʟᴀʏ ɴᴇᴡ", switch_inline_query_current_chat="/play "), dev_btn()],
     ]
     await update.message.reply_text(
         f"🗑️ *ᴄʟᴇᴀʀᴇᴅ {count} sᴏɴɢs\\!*",
@@ -254,9 +272,10 @@ async def clear_queue_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def shuffle_queue_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    group_id = update.effective_chat.id
-    if await queue_manager.shuffle_queue(group_id):
-        keyboard = [[InlineKeyboardButton("📋 ᴠɪᴇᴡ ǫᴜᴇᴜᴇ", callback_data="mc_queue"), dev_button()]]
+    chat_id = update.effective_chat.id
+    if await queue_manager.shuffle_queue(chat_id):
+        asyncio.create_task(auto_react(update, "🔀"))
+        keyboard = [[InlineKeyboardButton("📋 ᴠɪᴇᴡ ǫᴜᴇᴜᴇ", callback_data="mc_queue"), dev_btn()]]
         await update.message.reply_text("🔀 *ǫᴜᴇᴜᴇ sʜᴜғғʟᴇᴅ\\!*", parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(keyboard))
     else:
         await update.message.reply_text("❌ *ɴᴏᴛ ᴇɴᴏᴜɢʜ sᴏɴɢs\\!*", parse_mode="MarkdownV2")
@@ -264,19 +283,21 @@ async def shuffle_queue_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def remove_song(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("ᴜsᴀɢᴇ: `/remove position`", parse_mode="MarkdownV2")
+        await update.message.reply_text("ᴜsᴀɢᴇ: `/remove pos`", parse_mode="MarkdownV2")
         return
     try:
-        position = int(context.args[0]) - 1
-        if position < 0:
+        pos = int(context.args[0]) - 1
+        if pos < 0:
             await update.message.reply_text("❌ ᴘᴏsɪᴛɪᴏɴ ≥ 1", parse_mode="MarkdownV2")
             return
-        group_id = update.effective_chat.id
-        song = await queue_manager.remove_song(group_id, position)
+        song = await queue_manager.remove_song(update.effective_chat.id, pos)
         if song:
-            title = safe_md(song.get("title", "Unknown")[:55])
-            await update.message.reply_text(f"❌ *ʀᴇᴍᴏᴠᴇᴅ:*\n🎵 {title}", parse_mode="MarkdownV2",
-                                            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📋 ǫᴜᴇᴜᴇ", callback_data="mc_queue"), dev_button()]]))
+            keyboard = [[InlineKeyboardButton("📋 ǫᴜᴇᴜᴇ", callback_data="mc_queue"), dev_btn()]]
+            await update.message.reply_text(
+                f"❌ *ʀᴇᴍᴏᴠᴇᴅ:*\n🎵 {esc(song.get('title','')[:55])}",
+                parse_mode="MarkdownV2",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         else:
             await update.message.reply_text("❌ *ɪɴᴠᴀʟɪᴅ ᴘᴏsɪᴛɪᴏɴ\\!*", parse_mode="MarkdownV2")
     except ValueError:
@@ -286,64 +307,77 @@ async def remove_song(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def music_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    group_id = query.message.chat_id
+    chat_id = query.message.chat_id
 
     if query.data == "mc_skip":
-        next_song = await queue_manager.get_next_song(group_id)
+        next_song = await queue_manager.get_next_song(chat_id)
         if next_song:
-            title = safe_md(next_song.get("title", "Unknown")[:55])
-            dur = fmt_dur(next_song.get("duration", 0))
-            await join_and_play(group_id, next_song.get("title", ""), next_song)
-            keyboard = [[InlineKeyboardButton("⏭ sᴋɪᴘ ᴀɢᴀɪɴ", callback_data="mc_skip"), InlineKeyboardButton("📋 ǫᴜᴇᴜᴇ", callback_data="mc_queue")], [dev_button()]]
-            await query.edit_message_text(f"⏭️ *sᴋɪᴘᴘᴇᴅ\\!*\n\n🎵 *{title}*\n⏱ `{dur}`", parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(keyboard))
+            title = next_song.get("title", "Unknown")
+            dur = fmt(next_song.get("duration", 0))
+            vc_text = ""
+            if is_voice_available():
+                vc = await voice_play(chat_id, title, next_song)
+                vc_text = " 🔊" if vc["success"] else ""
+            kb = [[InlineKeyboardButton("⏭ sᴋɪᴘ ᴀɢᴀɪɴ", callback_data="mc_skip"), InlineKeyboardButton("📋 ǫᴜᴇᴜᴇ", callback_data="mc_queue")], [dev_btn()]]
+            await query.edit_message_text(
+                f"⏭️ *sᴋɪᴘᴘᴇᴅ\\!*{vc_text}\n\n🎵 *{esc(title[:60])}*\n⏱ `{dur}`",
+                parse_mode="MarkdownV2",
+                reply_markup=InlineKeyboardMarkup(kb)
+            )
         else:
-            await query.edit_message_text("🎵 *ǫᴜᴇᴜᴇ ɪs ᴇᴍᴘᴛʏ\\!*", parse_mode="MarkdownV2")
+            await query.edit_message_text("📭 *ǫᴜᴇᴜᴇ ᴇᴍᴘᴛʏ\\!*", parse_mode="MarkdownV2")
 
     elif query.data == "mc_pause":
-        success = await pause_voice_chat(group_id)
-        await query.answer("⏸ Paused!" if success else "Not playing!", show_alert=not success)
+        ok = await voice_pause(chat_id)
+        await query.answer("⏸ Paused!" if ok else "Not in VC!", show_alert=not ok)
 
     elif query.data == "mc_resume":
-        success = await resume_voice_chat(group_id)
-        await query.answer("▶️ Resumed!" if success else "Nothing to resume!", show_alert=not success)
+        ok = await voice_resume(chat_id)
+        await query.answer("▶️ Resumed!" if ok else "Not paused!", show_alert=not ok)
 
-    elif query.data == "mc_leave_vc":
-        success = await leave_voice_chat(group_id)
-        keyboard = [[InlineKeyboardButton("🎵 ᴘʟᴀʏ ᴀɢᴀɪɴ", switch_inline_query_current_chat="/play ")], [dev_button()]]
+    elif query.data == "mc_leave":
+        ok = await voice_leave(chat_id)
+        kb = [[InlineKeyboardButton("🎵 ᴘʟᴀʏ ᴀɢᴀɪɴ", switch_inline_query_current_chat="/play "), dev_btn()]]
         await query.edit_message_text(
-            "🔇 *ʟᴇғᴛ ᴠᴏɪᴄᴇ ᴄʜᴀᴛ\\!*" if success else "❌ *ɴᴏᴛ ɪɴ ᴀ ᴠᴏɪᴄᴇ ᴄʜᴀᴛ\\!*",
+            "🔇 *ʟᴇғᴛ ᴠᴏɪᴄᴇ ᴄʜᴀᴛ\\!*" if ok else "❌ *ɴᴏᴛ ɪɴ ᴀ ᴠᴄ\\!*",
             parse_mode="MarkdownV2",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            reply_markup=InlineKeyboardMarkup(kb)
         )
 
     elif query.data == "mc_queue":
-        queue = await queue_manager.get_queue(group_id)
-        now = get_now_playing(group_id)
+        queue = await queue_manager.get_queue(chat_id)
+        now = get_now_playing(chat_id)
         if not queue and not now:
             await query.answer("Queue is empty!", show_alert=True)
             return
         text = ""
         if now:
-            text += f"🔊 *ɴᴏᴡ ᴘʟᴀʏɪɴɢ:*\n🎵 {safe_md(now['title'][:40])}\n\n"
+            text += f"🔊 *ɴᴏᴡ ᴘʟᴀʏɪɴɢ:*\n🎵 {esc(now.get('title','')[:40])}\n\n"
         if queue:
-            text += f"📋 *ǫᴜᴇᴜᴇ — {len(queue)} sᴏɴɢs*\n\n"
-            for i, song in enumerate(queue[:8], 1):
-                title = safe_md(song.get("title", "Unknown")[:38])
-                dur = fmt_dur(song.get("duration", 0))
-                text += f"`{i}.` {title} ┃ `{dur}`\n"
+            text += f"📋 *{len(queue)} sᴏɴɢs*\n\n"
+            for i, s in enumerate(queue[:8], 1):
+                text += f"`{i}.` {esc(s.get('title','')[:35])} ┃ `{fmt(s.get('duration',0))}`\n"
             if len(queue) > 8:
-                text += f"\n_\\+{len(queue) - 8} ᴍᴏʀᴇ_"
-        keyboard = [[InlineKeyboardButton("⏭ sᴋɪᴘ", callback_data="mc_skip"), InlineKeyboardButton("🔀 sʜᴜғғʟᴇ", callback_data="mc_shuffle"), InlineKeyboardButton("🗑 ᴄʟᴇᴀʀ", callback_data="mc_clear")], [dev_button()]]
-        await query.edit_message_text(text, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(keyboard))
+                text += f"\n_\\+{len(queue)-8} ᴍᴏʀᴇ_"
+        kb = [
+            [InlineKeyboardButton("⏸ ᴘᴀᴜsᴇ", callback_data="mc_pause"), InlineKeyboardButton("⏭ sᴋɪᴘ", callback_data="mc_skip"), InlineKeyboardButton("▶️ ʀᴇsᴜᴍᴇ", callback_data="mc_resume")],
+            [InlineKeyboardButton("🔀 sʜᴜғғʟᴇ", callback_data="mc_shuffle"), InlineKeyboardButton("🗑 ᴄʟᴇᴀʀ", callback_data="mc_clear"), InlineKeyboardButton("🔄 ʀᴇғʀᴇsʜ", callback_data="mc_queue")],
+            [dev_btn()],
+        ]
+        await query.edit_message_text(text, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(kb))
 
     elif query.data == "mc_shuffle":
-        if await queue_manager.shuffle_queue(group_id):
+        if await queue_manager.shuffle_queue(chat_id):
             await query.answer("🔀 Shuffled!", show_alert=False)
         else:
             await query.answer("Not enough songs!", show_alert=True)
 
     elif query.data == "mc_clear":
-        count = await queue_manager.clear_queue(group_id)
-        await leave_voice_chat(group_id)
-        keyboard = [[InlineKeyboardButton("🎵 ᴘʟᴀʏ ɴᴇᴡ", switch_inline_query_current_chat="/play ")], [dev_button()]]
-        await query.edit_message_text(f"🗑️ *ᴄʟᴇᴀʀᴇᴅ {count} sᴏɴɢs\\!*", parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(keyboard))
+        count = await queue_manager.clear_queue(chat_id)
+        await voice_leave(chat_id)
+        kb = [[InlineKeyboardButton("🎵 ᴘʟᴀʏ ɴᴇᴡ", switch_inline_query_current_chat="/play "), dev_btn()]]
+        await query.edit_message_text(
+            f"🗑️ *ᴄʟᴇᴀʀᴇᴅ {count} sᴏɴɢs\\!*",
+            parse_mode="MarkdownV2",
+            reply_markup=InlineKeyboardMarkup(kb)
+        )
