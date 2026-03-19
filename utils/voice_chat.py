@@ -1,5 +1,7 @@
 import logging
 import asyncio
+import os
+import tempfile
 from typing import Optional, Dict
 import yt_dlp
 
@@ -8,18 +10,37 @@ logger = logging.getLogger(__name__)
 _now_playing: Dict[int, dict] = {}
 
 
+def _get_cookies_file():
+    """Create temp cookies file from environment variable"""
+    cookies_content = os.getenv("YOUTUBE_COOKIES", "")
+    if not cookies_content:
+        return None
+    try:
+        tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
+        tmp.write(cookies_content)
+        tmp.flush()
+        tmp.close()
+        return tmp.name
+    except Exception as e:
+        logger.error(f"Cookies file error: {e}")
+        return None
+
+
 def _get_yt_stream_url(query: str):
+    cookies_file = _get_cookies_file()
     opts = {
         "format": "bestaudio[ext=m4a]/bestaudio/best",
         "quiet": True,
         "no_warnings": True,
         "socket_timeout": 20,
-        "cookiefile": "/app/cookies.txt",
         "http_headers": {
             "User-Agent": "com.google.android.youtube/17.36.4 (Linux; U; Android 12) gzip",
         },
         "extractor_args": {"youtube": {"player_client": ["android"]}},
     }
+    if cookies_file:
+        opts["cookiefile"] = cookies_file
+
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(f"ytsearch1:{query}", download=False)
@@ -35,6 +56,12 @@ def _get_yt_stream_url(query: str):
     except Exception as e:
         logger.error(f"YT stream error: {e}")
         return None, None, 0, "", ""
+    finally:
+        if cookies_file:
+            try:
+                os.unlink(cookies_file)
+            except Exception:
+                pass
 
 
 async def voice_play(chat_id: int, query: str, song_data: dict = None) -> dict:
@@ -52,7 +79,12 @@ async def voice_play(chat_id: int, query: str, song_data: dict = None) -> dict:
             "webpage_url": yt_page,
         }
         _now_playing[chat_id] = play_data
-        return {"success": True, "title": play_data["title"], "duration": yt_dur, "url": yt_page}
+        return {
+            "success": True,
+            "title": play_data["title"],
+            "duration": yt_dur,
+            "url": yt_page
+        }
     return {"success": False, "msg": "YouTube se song nahi mila. Cookies check karo."}
 
 
@@ -79,7 +111,11 @@ async def voice_resume(chat_id: int) -> bool:
 
 
 async def init_pytgcalls(pyrogram_client=None):
-    logger.info("✅ Voice chat module ready (YouTube cookies mode)")
+    cookies = os.getenv("YOUTUBE_COOKIES", "")
+    if cookies:
+        logger.info("✅ Voice chat module ready (YouTube cookies loaded)")
+    else:
+        logger.warning("⚠️ Voice chat ready but YOUTUBE_COOKIES not set!")
     return True
 
 
