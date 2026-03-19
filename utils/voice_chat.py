@@ -13,20 +13,9 @@ _now_playing: Dict[int, dict] = {}
 async def init_pytgcalls(pyrogram_client: Client):
     global _pytgcalls
     try:
-        from pytgcalls import Client as PyTgCalls
-        from pytgcalls.types import MediaStream
-
-        _pytgcalls = PyTgCalls(pyrogram_client)
-
-        @_pytgcalls.on_stream_end()
-        async def on_end(client, update):
-            chat_id = update.chat_id
-            if chat_id in _now_playing:
-                del _now_playing[chat_id]
-
-        await _pytgcalls.start()
-        logger.info("✅ PyTgCalls voice streaming ready")
-        return True
+        import pytgcalls
+        logger.info(f"pytgcalls available: {dir(pytgcalls)}")
+        raise Exception("checking pytgcalls structure")
     except Exception as e:
         logger.error(f"PyTgCalls init failed: {e}")
         return False
