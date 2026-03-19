@@ -1,197 +1,196 @@
 import logging
 import asyncio
-import os
-import tempfile
 from typing import Optional, Dict
 import yt_dlp
-from pytgcalls import PyTgCalls
-from pytgcalls.types import Update
-from pytgcalls.types.input_stream import AudioPiped, AudioImagePiped
-from pytgcalls.types.input_stream.quality import HighQualityAudio
 from pyrogram import Client
 
 logger = logging.getLogger(__name__)
 
-# Global pytgcalls instance
-_pytgcalls: Optional[PyTgCalls] = None
-_pyrogram_client: Optional[Client] = None
-
-# Track current playing per group
+_pytgcalls = None
 _now_playing: Dict[int, dict] = {}
-
-
-def get_pytgcalls() -> Optional[PyTgCalls]:
-    return _pytgcalls
+_queued_next: Dict[int, dict] = {}
 
 
 async def init_pytgcalls(pyrogram_client: Client):
-    """Initialize PyTgCalls with pyrogram client"""
-    global _pytgcalls, _pyrogram_client
+    global _pytgcalls
     try:
-        _pyrogram_client = pyrogram_client
+        from pytgcalls import PyTgCalls
+        from pytgcalls import idle
         _pytgcalls = PyTgCalls(pyrogram_client)
 
         @_pytgcalls.on_stream_end()
-        async def on_stream_end(client, update: Update):
-            logger.info(f"Stream ended in chat: {update.chat_id}")
-            if update.chat_id in _now_playing:
-                del _now_playing[update.chat_id]
+        async def on_end(client, update):
+            chat_id = update.chat_id
+            logger.info(f"Stream ended: {chat_id}")
+            if chat_id in _now_playing:
+                del _now_playing[chat_id]
+            # Auto play next
+            if chat_id in _queued_next:
+                next_song = _queued_next.pop(chat_id)
+                await _play_stream(chat_id, next_song)
 
         await _pytgcalls.start()
-        logger.info("✅ PyTgCalls initialized for voice streaming")
+        logger.info("✅ PyTgCalls voice streaming ready")
         return True
     except Exception as e:
         logger.error(f"PyTgCalls init failed: {e}")
         return False
 
 
-def _get_yt_audio_url(query: str) -> Optional[str]:
-    """Get direct audio stream URL from YouTube using yt-dlp"""
+def _get_yt_stream_url(query: str):
+    """Get YouTube audio stream URL"""
     opts = {
-        "format": "bestaudio/best",
+        "format": "bestaudio[ext=m4a]/bestaudio/best",
         "quiet": True,
         "no_warnings": True,
         "socket_timeout": 20,
         "http_headers": {
             "User-Agent": "com.google.android.youtube/17.36.4 (Linux; U; Android 12) gzip",
         },
-        "extractor_args": {
-            "youtube": {"player_client": ["android"]}
-        },
+        "extractor_args": {"youtube": {"player_client": ["android"]}},
     }
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
-            search = f"ytsearch1:{query}"
-            info = ydl.extract_info(search, download=False)
+            info = ydl.extract_info(f"ytsearch1:{query}", download=False)
             if "entries" in info and info["entries"]:
                 info = info["entries"][0]
-            url = info.get("url")
-            title = info.get("title", "Unknown")
-            duration = info.get("duration", 0)
-            if url:
-                logger.info(f"✅ YouTube audio URL: {title}")
-                return url, title, duration
-    except Exception as e:
-        logger.error(f"yt-dlp error: {e}")
-    return None, None, 0
-
-
-async def join_and_play(chat_id: int, query: str, song_data: dict = None) -> dict:
-    """
-    Join voice chat and start playing.
-    Returns dict with status and message.
-    """
-    global _pytgcalls, _now_playing
-
-    if not _pytgcalls:
-        return {"success": False, "msg": "Voice streaming not initialized"}
-
-    try:
-        # Get audio URL - try yt-dlp first for full songs
-        audio_url = None
-        title = query
-        duration = 0
-
-        if song_data and song_data.get("url"):
-            # Use existing song URL (from Deezer/JioSaavn)
-            audio_url = song_data["url"]
-            title = song_data.get("title", query)
-            duration = song_data.get("duration", 0)
-        else:
-            # Try YouTube for full song
-            audio_url, title, duration = await asyncio.get_event_loop().run_in_executor(
-                None, _get_yt_audio_url, query
+            return (
+                info.get("url"),
+                info.get("title", "Unknown"),
+                info.get("duration", 0),
+                info.get("thumbnail", ""),
             )
+    except Exception as e:
+        logger.error(f"YT stream error: {e}")
+        return None, None, 0, ""
 
+
+async def _play_stream(chat_id: int, song_data: dict) -> bool:
+    """Internal: play audio in voice chat"""
+    global _pytgcalls, _now_playing
+    if not _pytgcalls:
+        return False
+    try:
+        from pytgcalls.types import AudioPiped
+        from pytgcalls.types.input_stream.quality import HighQualityAudio
+
+        audio_url = song_data.get("stream_url") or song_data.get("url", "")
         if not audio_url:
-            return {"success": False, "msg": "Could not get audio stream"}
-
-        # Check if already in a call
-        try:
-            active_calls = await _pytgcalls.active_calls()
-            already_in_call = any(call.chat_id == chat_id for call in active_calls)
-        except Exception:
-            already_in_call = False
+            return False
 
         stream = AudioPiped(audio_url, HighQualityAudio())
 
-        if already_in_call:
-            # Change stream if already playing
+        try:
+            active = await _pytgcalls.active_calls()
+            in_call = any(str(c.chat_id) == str(chat_id) for c in active)
+        except Exception:
+            in_call = False
+
+        if in_call:
             await _pytgcalls.change_stream(chat_id, stream)
-            logger.info(f"Changed stream in {chat_id}: {title}")
         else:
-            # Join voice chat and start playing
-            await _pytgcalls.join_group_call(
-                chat_id,
-                stream,
-                stream_type=None,
-            )
-            logger.info(f"Joined voice chat in {chat_id}: {title}")
+            await _pytgcalls.join_group_call(chat_id, stream)
 
-        _now_playing[chat_id] = {
-            "title": title,
-            "duration": duration,
-            "url": audio_url,
+        _now_playing[chat_id] = song_data
+        logger.info(f"▶️ Playing in {chat_id}: {song_data.get('title')}")
+        return True
+    except Exception as e:
+        err = str(e)
+        logger.error(f"Voice chat error {chat_id}: {err}")
+        return False
+
+
+async def voice_play(chat_id: int, query: str, song_data: dict = None) -> dict:
+    """Play song in voice chat - tries to get full YT stream"""
+    if not _pytgcalls:
+        return {"success": False, "msg": "Voice streaming not available"}
+
+    title = song_data.get("title", query) if song_data else query
+    stream_url = None
+
+    # Try to get YouTube stream URL for full song
+    loop = asyncio.get_event_loop()
+    yt_url, yt_title, yt_dur, yt_thumb = await loop.run_in_executor(
+        None, _get_yt_stream_url, title
+    )
+
+    if yt_url:
+        stream_url = yt_url
+        play_data = {
+            "title": yt_title or title,
+            "stream_url": yt_url,
+            "duration": yt_dur,
+            "thumbnail": yt_thumb,
+            "source": "YouTube (Voice)",
         }
+    elif song_data and song_data.get("url"):
+        stream_url = song_data["url"]
+        play_data = {**song_data, "stream_url": song_data["url"]}
+    else:
+        return {"success": False, "msg": "Could not get audio stream"}
 
+    success = await _play_stream(chat_id, play_data)
+
+    if success:
         return {
             "success": True,
-            "title": title,
-            "duration": duration,
-            "msg": f"Now playing: {title}",
+            "title": play_data["title"],
+            "duration": play_data.get("duration", 0),
         }
+    else:
+        return {"success": False, "msg": "Failed to join voice chat. Make sure voice chat is active!"}
 
+
+async def voice_skip(chat_id: int, song_data: dict = None) -> dict:
+    """Skip current and play next"""
+    if not _pytgcalls:
+        return {"success": False}
+    if song_data:
+        return await voice_play(chat_id, song_data.get("title", ""), song_data)
+    try:
+        await _pytgcalls.leave_group_call(chat_id)
+        if chat_id in _now_playing:
+            del _now_playing[chat_id]
+        return {"success": True}
     except Exception as e:
-        error_msg = str(e)
-        logger.error(f"Voice chat error in {chat_id}: {error_msg}")
-
-        if "GROUPCALL_FORBIDDEN" in error_msg:
-            return {"success": False, "msg": "Voice chat is not enabled in this group!"}
-        elif "GROUP_CALL_INVALID" in error_msg:
-            return {"success": False, "msg": "Please start a voice chat first!"}
-        else:
-            return {"success": False, "msg": f"Error: {error_msg[:100]}"}
+        return {"success": False, "msg": str(e)}
 
 
-async def leave_voice_chat(chat_id: int) -> bool:
-    """Leave voice chat"""
-    global _pytgcalls, _now_playing
+async def voice_pause(chat_id: int) -> bool:
+    if not _pytgcalls:
+        return False
+    try:
+        await _pytgcalls.pause_stream(chat_id)
+        return True
+    except Exception:
+        return False
+
+
+async def voice_resume(chat_id: int) -> bool:
+    if not _pytgcalls:
+        return False
+    try:
+        await _pytgcalls.resume_stream(chat_id)
+        return True
+    except Exception:
+        return False
+
+
+async def voice_leave(chat_id: int) -> bool:
     if not _pytgcalls:
         return False
     try:
         await _pytgcalls.leave_group_call(chat_id)
         if chat_id in _now_playing:
             del _now_playing[chat_id]
-        logger.info(f"Left voice chat: {chat_id}")
         return True
-    except Exception as e:
-        logger.error(f"Leave voice chat error: {e}")
-        return False
-
-
-async def pause_voice_chat(chat_id: int) -> bool:
-    """Pause playback"""
-    if not _pytgcalls:
-        return False
-    try:
-        await _pytgcalls.pause_stream(chat_id)
-        return True
-    except Exception as e:
-        logger.error(f"Pause error: {e}")
-        return False
-
-
-async def resume_voice_chat(chat_id: int) -> bool:
-    """Resume playback"""
-    if not _pytgcalls:
-        return False
-    try:
-        await _pytgcalls.resume_stream(chat_id)
-        return True
-    except Exception as e:
-        logger.error(f"Resume error: {e}")
+    except Exception:
         return False
 
 
 def get_now_playing(chat_id: int) -> Optional[dict]:
     return _now_playing.get(chat_id)
+
+
+def is_voice_available() -> bool:
+    return _pytgcalls is not None
