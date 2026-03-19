@@ -1,5 +1,5 @@
 import logging
-from motor.motor_asyncio import AsyncClient, AsyncDatabase
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from typing import Optional, Dict, List
 from config import MONGO_DB_URI, MONGO_DB_NAME
 
@@ -10,13 +10,13 @@ class MongoDBManager:
     """MongoDB connection and operations manager"""
 
     def __init__(self):
-        self.client: Optional[AsyncClient] = None
-        self.db: Optional[AsyncDatabase] = None
+        self.client: Optional[AsyncIOMotorClient] = None
+        self.db: Optional[AsyncIOMotorDatabase] = None
 
     async def connect(self):
         """Connect to MongoDB"""
         try:
-            self.client = AsyncClient(MONGO_DB_URI)
+            self.client = AsyncIOMotorClient(MONGO_DB_URI)
             self.db = self.client[MONGO_DB_NAME]
             # Verify connection
             await self.db.command("ping")
