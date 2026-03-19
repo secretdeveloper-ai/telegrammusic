@@ -11,6 +11,7 @@ gpt_assistant = GPTAssistant()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command"""
+    logger.info(f"/start command received from user_id={update.effective_user.id}, chat_id={update.effective_chat.id}")
     welcome_message = (
         f"🎵 **Welcome to {BOT_NAME}!**\n\n"
         "I can play music in your group from YouTube and Spotify using ChatGPT AI!\n\n"

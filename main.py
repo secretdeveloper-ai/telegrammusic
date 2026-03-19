@@ -139,6 +139,14 @@ def main():
     # Broadcast Command (Owner Only)
     application.add_handler(CommandHandler("broadcast", broadcast_message))
 
+    # Debug: log every update received
+    import logging
+    from telegram import Update
+    from telegram.ext import ContextTypes, MessageHandler, filters
+    async def log_all_updates(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        logging.getLogger("__main__").info(f"[DEBUG] Received update: {update}")
+    application.add_handler(MessageHandler(filters.ALL, log_all_updates), group=-100)
+
     # Error handler
     application.add_error_handler(error_handler)
 
