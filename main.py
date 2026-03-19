@@ -5,7 +5,10 @@ from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
+    CallbackQueryHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
 
 from config import (
@@ -26,6 +29,7 @@ from handlers.music_commands import (
     clear_queue_cmd,
     shuffle_queue_cmd,
     remove_song,
+    music_button_callback,
 )
 
 from handlers.group_commands import (
@@ -46,17 +50,13 @@ from handlers.utility_commands import (
     stats,
     about,
     error_handler,
+    util_button_callback,
 )
 
-from handlers.broadcast_commands import (
-    broadcast_message,
-)
-
-# Import managers
+from handlers.broadcast_commands import broadcast_message
 from utils.mongodb_manager import mongo_manager
 from utils.pyrogram_client import pyrogram_client
 
-# Setup logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.DEBUG if DEBUG else logging.INFO,
@@ -65,9 +65,7 @@ logger = logging.getLogger(__name__)
 
 
 async def post_init(application: Application) -> None:
-    """Initialize bot after starting"""
     try:
-        # Connect to MongoDB
         await mongo_manager.connect()
         await mongo_manager.create_indexes()
         logger.info("✅ MongoDB initialized")
@@ -76,7 +74,6 @@ async def post_init(application: Application) -> None:
         sys.exit(1)
 
     try:
-        # Connect Pyrogram client
         connected = await pyrogram_client.connect()
         if connected:
             logger.info("✅ Pyrogram assistant account ready for music streaming")
@@ -87,7 +84,6 @@ async def post_init(application: Application) -> None:
 
 
 async def shutdown(application: Application) -> None:
-    """Cleanup on bot shutdown"""
     try:
         await mongo_manager.disconnect()
         await pyrogram_client.disconnect()
@@ -97,7 +93,6 @@ async def shutdown(application: Application) -> None:
 
 
 def main():
-    """Main bot function"""
     if not TELEGRAM_BOT_TOKEN:
         logger.error("❌ TELEGRAM_BOT_TOKEN not set!")
         return
@@ -107,10 +102,9 @@ def main():
     logger.info(f"📍 Owner ID: {OWNER_ID}")
     logger.info(f"📢 Support: {SUPPORT_CHAT}")
 
-    # Create application
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # Register command handlers - Music Commands
+    # Music commands
     application.add_handler(CommandHandler("play", play))
     application.add_handler(CommandHandler("next", play_next))
     application.add_handler(CommandHandler("skip", skip))
@@ -119,7 +113,7 @@ def main():
     application.add_handler(CommandHandler("clear_queue", clear_queue_cmd))
     application.add_handler(CommandHandler("remove", remove_song))
 
-    # Group Management Commands
+    # Group commands
     application.add_handler(CommandHandler("init", init_group))
     application.add_handler(CommandHandler("info", group_info))
     application.add_handler(CommandHandler("admin_add", add_admin))
@@ -129,20 +123,22 @@ def main():
     application.add_handler(CommandHandler("set_prefix", set_prefix_cmd))
     application.add_handler(CommandHandler("queue_limit", set_queue_limit_cmd))
 
-    # Utility Commands
+    # Utility commands
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_cmd))
     application.add_handler(CommandHandler("ask", ask_assistant))
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CommandHandler("about", about))
-    
-    # Broadcast Command (Owner Only)
+
+    # Owner command
     application.add_handler(CommandHandler("broadcast", broadcast_message))
 
-    # Debug: log every update received
-    import logging
-    from telegram import Update
-    from telegram.ext import ContextTypes, MessageHandler, filters
+    # Button callbacks
+    application.add_handler(CallbackQueryHandler(music_button_callback, pattern="^btn_"))
+    application.add_handler(CallbackQueryHandler(util_button_callback, pattern="^util_"))
+    application.add_handler(CallbackQueryHandler(util_button_callback, pattern="^(show_|back_|how_to_play)"))
+
+    # Debug log
     async def log_all_updates(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.getLogger("__main__").info(f"[DEBUG] Received update: {update}")
     application.add_handler(MessageHandler(filters.ALL, log_all_updates), group=-100)
@@ -150,18 +146,20 @@ def main():
     # Error handler
     application.add_error_handler(error_handler)
 
-    # Lifecycle callbacks
+    # Lifecycle
     application.post_init = post_init
     application.post_stop = shutdown
 
-    # Start bot
     if TELEGRAM_WEBHOOK_URL:
-        logger.info(f"🌐 Starting with webhook: {TELEGRAM_WEBHOOK_URL}")
+        webhook_url = TELEGRAM_WEBHOOK_URL
+        if not webhook_url.startswith("https://"):
+            webhook_url = f"https://{webhook_url}"
+        logger.info(f"🌐 Starting with webhook: {webhook_url}")
         application.run_webhook(
             listen="0.0.0.0",
             port=WEBHOOK_PORT,
             url_path="",
-            webhook_url=TELEGRAM_WEBHOOK_URL,
+            webhook_url=webhook_url,
         )
     else:
         logger.info("🔄 Starting with polling...")
@@ -170,4 +168,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
