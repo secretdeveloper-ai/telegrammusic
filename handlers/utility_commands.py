@@ -8,14 +8,41 @@ from config import SUPPORT_CHAT, BOT_NAME, OWNER_ID
 logger = logging.getLogger(__name__)
 gpt_assistant = GPTAssistant()
 
-DEVELOPER = "@secret_fetcher"
+DEVELOPER = "@secret\\_fetcher"
 
 
 def esc(text: str) -> str:
-    """Escape MarkdownV2 special chars"""
+    """Escape ALL MarkdownV2 special chars safely"""
+    if not text:
+        return ""
+    # Convert to plain ASCII-safe string first for display
+    safe = ""
+    for ch in str(text):
+        if ord(ch) > 127:
+            # Replace non-ASCII unicode with safe equivalent
+            safe += ch
+        else:
+            safe += ch
+    # Now escape MarkdownV2 special chars
     for ch in r'\_*[]()~`>#+-=|{}.!':
-        text = text.replace(ch, f'\\{ch}')
-    return text
+        safe = safe.replace(ch, f'\\{ch}')
+    return safe
+
+
+def safe_name(user) -> str:
+    """Get safe display name - escape but keep readable"""
+    name = user.first_name or "User"
+    # Remove/replace problematic unicode bold/italic chars
+    cleaned = name.encode('ascii', 'ignore').decode('ascii')
+    if not cleaned.strip():
+        cleaned = "User"
+    return esc(cleaned)
+
+
+def mention(user) -> str:
+    """Create safe mention link"""
+    name = safe_name(user)
+    return f"[{name}](tg://user?id={user.id})"
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -23,43 +50,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     logger.info(f"/start from user_id={user.id}, chat_id={chat.id}")
 
-    user_mention = f"[{esc(user.first_name)}](tg://user?id={user.id})"
-    chat_type = "Private" if chat.type == "private" else f"Group: {esc(chat.title or 'Unknown')}"
-
-    # Notify owner
+    # Notify owner — use HTML to avoid MarkdownV2 issues with unicode names
     try:
+        chat_info = "Private Chat" if chat.type == "private" else f"Group: {chat.title or 'Unknown'}"
+        username = f"@{user.username}" if user.username else "no username"
         await context.bot.send_message(
             chat_id=OWNER_ID,
             text=(
-                f"🔔 *New User Started Bot\\!*\n\n"
-                f"👤 User: [{esc(user.first_name)}](tg://user?id={user.id})\n"
-                f"🆔 User ID: `{user.id}`\n"
-                f"📱 Username: @{esc(user.username or 'none')}\n"
-                f"💬 Chat: {chat_type}\n"
-                f"🆔 Chat ID: `{chat.id}`"
+                f"🔔 <b>New User Started Bot!</b>\n\n"
+                f"👤 Name: <a href='tg://user?id={user.id}'>{user.first_name}</a>\n"
+                f"🆔 User ID: <code>{user.id}</code>\n"
+                f"📱 Username: {username}\n"
+                f"💬 Chat: {chat_info}\n"
+                f"🆔 Chat ID: <code>{chat.id}</code>"
             ),
-            parse_mode="MarkdownV2"
+            parse_mode="HTML"
         )
     except Exception as e:
         logger.warning(f"Could not notify owner: {e}")
 
-    welcome_text = (
-        f"🎵 *Hey {user_mention}\\!*\n\n"
-        f"╔══════════════════╗\n"
-        f"║  🎧  *{esc(BOT_NAME)}*  🎧  ║\n"
-        f"╚══════════════════╝\n\n"
-        f"✨ *Your Premium Music Experience*\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🎵  Stream from YouTube\n"
-        f"📋  Smart queue system\n"
-        f"🔀  Shuffle & skip anytime\n"
-        f"👥  Group admin controls\n"
-        f"📊  Live statistics\n"
-        f"📢  Owner broadcasts\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"👨‍💻 *Dev:* {DEVELOPER}\n\n"
-        f"👇 *Choose an option below*"
-    )
+    # Welcome message — use HTML for main message too (safer with unicode names)
+    chat_display = "Private" if chat.type == "private" else esc(chat.title or "Group")
 
     keyboard = [
         [
@@ -76,41 +87,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
 
     await update.message.reply_text(
-        welcome_text,
-        parse_mode="MarkdownV2",
+        f"<b>🎵 Hey <a href='tg://user?id={user.id}'>{user.first_name}</a>! Welcome to {BOT_NAME}</b>\n\n"
+        f"╔══════════════════╗\n"
+        f"║  🎧  <b>MUSIC BOT</b>  🎧  ║\n"
+        f"╚══════════════════╝\n\n"
+        f"✨ <b>Your Premium Music Experience</b>\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🎵  Stream from YouTube\n"
+        f"📋  Smart queue system\n"
+        f"🔀  Shuffle &amp; skip anytime\n"
+        f"👥  Group admin controls\n"
+        f"📊  Live statistics\n"
+        f"📢  Owner broadcasts\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👨‍💻 <b>Dev:</b> @secret_fetcher\n\n"
+        f"👇 <b>Choose an option below</b>",
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = (
-        f"📖 *{esc(BOT_NAME)} — Commands*\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🎵 *MUSIC*\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"▶️ `/play` \\<song\\>\n"
-        f"⏭️ `/skip` — Skip song\n"
-        f"⏩ `/next` — Next info\n"
-        f"📋 `/queue` — View queue\n"
-        f"🔀 `/shuffle` — Shuffle\n"
-        f"❌ `/remove` \\<pos\\>\n"
-        f"🗑️ `/clear\\_queue`\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"👥 *ADMIN*\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"⚙️ `/init` — Setup group\n"
-        f"ℹ️ `/info` — Group info\n"
-        f"👑 `/admin\\_add` \\<id\\>\n"
-        f"🚫 `/ban` \\<id\\>\n"
-        f"✅ `/unban` \\<id\\>\n"
-        f"🔤 `/set\\_prefix` \\<char\\>\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"👤 *OWNER ONLY*\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📢 `/broadcast` \\<msg\\>\n\n"
-        f"👨‍💻 *Dev:* {DEVELOPER}"
-    )
-
     keyboard = [
         [InlineKeyboardButton("🎵 Play Music", switch_inline_query_current_chat="/play ")],
         [
@@ -120,8 +117,32 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
 
     await update.message.reply_text(
-        help_text,
-        parse_mode="MarkdownV2",
+        f"<b>📖 {BOT_NAME} — Commands</b>\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🎵 <b>MUSIC</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"▶️ /play &lt;song&gt;\n"
+        f"⏭️ /skip — Skip song\n"
+        f"⏩ /next — Next info\n"
+        f"📋 /queue — View queue\n"
+        f"🔀 /shuffle — Shuffle\n"
+        f"❌ /remove &lt;pos&gt;\n"
+        f"🗑️ /clear_queue\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"👥 <b>ADMIN</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"⚙️ /init — Setup group\n"
+        f"ℹ️ /info — Group info\n"
+        f"👑 /admin_add &lt;id&gt;\n"
+        f"🚫 /ban &lt;id&gt;\n"
+        f"✅ /unban &lt;id&gt;\n"
+        f"🔤 /set_prefix &lt;char&gt;\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 <b>OWNER ONLY</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📢 /broadcast &lt;msg&gt;\n\n"
+        f"👨‍💻 <b>Dev:</b> @secret_fetcher",
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -134,36 +155,38 @@ async def util_button_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return [[InlineKeyboardButton("🔙 Back", callback_data="util_back")]]
 
     if query.data == "util_commands":
-        text = (
-            f"🎵 *Quick Commands:*\n\n"
-            f"▶️ `/play` \\<song name\\>\n"
-            f"📋 `/queue` — View queue\n"
-            f"⏭️ `/skip` — Skip song\n"
-            f"🔀 `/shuffle` — Shuffle\n"
-            f"🗑️ `/clear\\_queue` — Clear all\n"
-            f"📊 `/stats` — Statistics\n"
-            f"ℹ️ `/info` — Group info\n\n"
-            f"👨‍💻 *Dev:* {DEVELOPER}"
+        await query.edit_message_text(
+            f"🎵 <b>Quick Commands:</b>\n\n"
+            f"▶️ /play &lt;song name&gt;\n"
+            f"📋 /queue — View queue\n"
+            f"⏭️ /skip — Skip song\n"
+            f"🔀 /shuffle — Shuffle\n"
+            f"🗑️ /clear_queue — Clear all\n"
+            f"📊 /stats — Statistics\n"
+            f"ℹ️ /info — Group info\n\n"
+            f"👨‍💻 <b>Dev:</b> @secret_fetcher",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(back_btn())
         )
-        await query.edit_message_text(text, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(back_btn()))
 
     elif query.data == "util_howto":
-        text = (
-            f"❓ *How to Use:*\n\n"
-            f"*Step 1️⃣* — Add bot to your group\n"
-            f"*Step 2️⃣* — Type `/init` to setup\n"
-            f"*Step 3️⃣* — Type `/play Tum Hi Aana`\n"
-            f"*Step 4️⃣* — Song added to queue\\!\n\n"
+        await query.edit_message_text(
+            f"❓ <b>How to Use:</b>\n\n"
+            f"<b>Step 1️⃣</b> — Add bot to your group\n"
+            f"<b>Step 2️⃣</b> — Type /init to setup\n"
+            f"<b>Step 3️⃣</b> — Type /play Tum Hi Aana\n"
+            f"<b>Step 4️⃣</b> — Song added to queue!\n\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"💡 *Pro Tips:*\n"
+            f"💡 <b>Pro Tips:</b>\n"
             f"• Use full song name for best results\n"
             f"• Add artist name for accuracy\n"
-            f"• `/queue` to see all songs\n"
-            f"• `/shuffle` for random play\n"
-            f"• Admins can `/ban` spammers\n\n"
-            f"👨‍💻 *Dev:* {DEVELOPER}"
+            f"• /queue to see all songs\n"
+            f"• /shuffle for random play\n"
+            f"• Admins can /ban spammers\n\n"
+            f"👨‍💻 <b>Dev:</b> @secret_fetcher",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(back_btn())
         )
-        await query.edit_message_text(text, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(back_btn()))
 
     elif query.data == "util_stats":
         from utils.mongo_queue_manager import MongoQueueManager
@@ -174,27 +197,32 @@ async def util_button_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         settings = await gm.get_group_settings(chat_id)
         queue_len = await qm.get_queue_length(chat_id)
 
-        text = (
-            f"📊 *Statistics*\n\n"
-            f"🎵 Songs Played: `{settings['stats']['total_songs_played']}`\n"
-            f"➕ Songs Queued: `{settings['stats']['total_queue_added']}`\n"
-            f"📻 In Queue Now: `{queue_len}`\n"
-            f"👥 Admins: `{len(settings['admins'])}`\n"
-            f"🚫 Banned Users: `{len(settings['banned_users'])}`\n\n"
-            f"👨‍💻 *Dev:* {DEVELOPER}"
-        )
         keyboard = [
             [InlineKeyboardButton("🔄 Refresh", callback_data="util_stats")],
             [InlineKeyboardButton("🔙 Back", callback_data="util_back")],
         ]
-        await query.edit_message_text(text, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.edit_message_text(
+            f"📊 <b>Statistics</b>\n\n"
+            f"🎵 Songs Played: <code>{settings['stats']['total_songs_played']}</code>\n"
+            f"➕ Songs Queued: <code>{settings['stats']['total_queue_added']}</code>\n"
+            f"📻 In Queue Now: <code>{queue_len}</code>\n"
+            f"👥 Admins: <code>{len(settings['admins'])}</code>\n"
+            f"🚫 Banned Users: <code>{len(settings['banned_users'])}</code>\n\n"
+            f"👨‍💻 <b>Dev:</b> @secret_fetcher",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
     elif query.data == "util_about":
-        text = (
+        keyboard = [
+            [InlineKeyboardButton("💬 Support", url=SUPPORT_CHAT)],
+            [InlineKeyboardButton("🔙 Back", callback_data="util_back")],
+        ]
+        await query.edit_message_text(
             f"╔══════════════════╗\n"
-            f"║  🎧  *{esc(BOT_NAME)}*  🎧  ║\n"
+            f"║  🎧  <b>MUSIC BOT</b>  🎧  ║\n"
             f"╚══════════════════╝\n\n"
-            f"🌟 *Premium Music Bot*\n\n"
+            f"🌟 <b>Premium Music Bot</b>\n\n"
             f"✅ YouTube streaming\n"
             f"✅ Smart queue system\n"
             f"✅ Group admin controls\n"
@@ -203,15 +231,12 @@ async def util_button_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             f"✅ MongoDB database\n"
             f"✅ 24/7 on Railway\n\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"👨‍💻 *Developer:* {DEVELOPER}\n"
-            f"🚀 *Hosted:* Railway\n"
-            f"💾 *Database:* MongoDB"
+            f"👨‍💻 <b>Developer:</b> @secret_fetcher\n"
+            f"🚀 <b>Hosted:</b> Railway\n"
+            f"💾 <b>Database:</b> MongoDB",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
-        keyboard = [
-            [InlineKeyboardButton("💬 Support", url=SUPPORT_CHAT)],
-            [InlineKeyboardButton("🔙 Back", callback_data="util_back")],
-        ]
-        await query.edit_message_text(text, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif query.data == "util_queue":
         from utils.mongo_queue_manager import MongoQueueManager
@@ -220,40 +245,23 @@ async def util_button_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         queue = await qm.get_queue(chat_id)
 
         if not queue:
-            text = f"📋 *Queue is empty\\!*\n\nUse `/play song name` to add songs\\.\n\n👨‍💻 *Dev:* {DEVELOPER}"
+            text = f"📋 <b>Queue is empty!</b>\n\nUse /play song name to add songs.\n\n👨‍💻 <b>Dev:</b> @secret_fetcher"
         else:
-            text = f"📋 *Queue — {len(queue)} song{'s' if len(queue) > 1 else ''}*\n\n"
+            text = f"📋 <b>Queue — {len(queue)} song{'s' if len(queue) > 1 else ''}</b>\n\n"
             for i, song in enumerate(queue[:8], 1):
-                title = esc(song.get("title", "Unknown")[:38])
+                title = song.get("title", "Unknown")[:38]
                 dur = song.get("duration", 0)
                 s = int(dur)
                 dur_str = f"{s // 60}:{s % 60:02d}"
-                text += f"`{i}\\.` {title} — `{dur_str}`\n"
+                text += f"<code>{i}.</code> {title} — <code>{dur_str}</code>\n"
             if len(queue) > 8:
-                text += f"\n_\\+{len(queue) - 8} more songs_"
+                text += f"\n<i>+{len(queue) - 8} more songs</i>"
+            text += f"\n\n👨‍💻 <b>Dev:</b> @secret_fetcher"
 
-        await query.edit_message_text(text, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(back_btn()))
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back_btn()))
 
     elif query.data == "util_back":
         user = query.from_user
-        user_mention = f"[{esc(user.first_name)}](tg://user?id={user.id})"
-        text = (
-            f"🎵 *Hey {user_mention}\\!*\n\n"
-            f"╔══════════════════╗\n"
-            f"║  🎧  *{esc(BOT_NAME)}*  🎧  ║\n"
-            f"╚══════════════════╝\n\n"
-            f"✨ *Your Premium Music Experience*\n\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🎵  Stream from YouTube\n"
-            f"📋  Smart queue system\n"
-            f"🔀  Shuffle & skip anytime\n"
-            f"👥  Group admin controls\n"
-            f"📊  Live statistics\n"
-            f"📢  Owner broadcasts\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"👨‍💻 *Dev:* {DEVELOPER}\n\n"
-            f"👇 *Choose an option below*"
-        )
         keyboard = [
             [
                 InlineKeyboardButton("🎵 Commands", callback_data="util_commands"),
@@ -267,7 +275,25 @@ async def util_button_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 InlineKeyboardButton("💬 Support", url=SUPPORT_CHAT),
             ],
         ]
-        await query.edit_message_text(text, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.edit_message_text(
+            f"<b>🎵 Hey <a href='tg://user?id={user.id}'>{user.first_name}</a>! Welcome to {BOT_NAME}</b>\n\n"
+            f"╔══════════════════╗\n"
+            f"║  🎧  <b>MUSIC BOT</b>  🎧  ║\n"
+            f"╚══════════════════╝\n\n"
+            f"✨ <b>Your Premium Music Experience</b>\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎵  Stream from YouTube\n"
+            f"📋  Smart queue system\n"
+            f"🔀  Shuffle &amp; skip anytime\n"
+            f"👥  Group admin controls\n"
+            f"📊  Live statistics\n"
+            f"📢  Owner broadcasts\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"👨‍💻 <b>Dev:</b> @secret_fetcher\n\n"
+            f"👇 <b>Choose an option below</b>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
 
 async def ask_assistant(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -277,7 +303,7 @@ async def ask_assistant(update: Update, context: ContextTypes.DEFAULT_TYPE):
     question = " ".join(context.args)
     await update.message.chat.send_action("typing")
     response = await gpt_assistant.get_response(question)
-    await update.message.reply_text(esc(response), parse_mode="MarkdownV2")
+    await update.message.reply_text(response)
 
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -291,14 +317,14 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [[InlineKeyboardButton("🔄 Refresh", callback_data="util_stats")]]
     await update.message.reply_text(
-        f"📊 *Statistics*\n\n"
-        f"🎵 Songs Played: `{settings['stats']['total_songs_played']}`\n"
-        f"➕ Songs Queued: `{settings['stats']['total_queue_added']}`\n"
-        f"📻 In Queue: `{queue_length}`\n"
-        f"👥 Admins: `{len(settings['admins'])}`\n"
-        f"🚫 Banned: `{len(settings['banned_users'])}`\n\n"
-        f"👨‍💻 *Dev:* {DEVELOPER}",
-        parse_mode="MarkdownV2",
+        f"📊 <b>Statistics</b>\n\n"
+        f"🎵 Songs Played: <code>{settings['stats']['total_songs_played']}</code>\n"
+        f"➕ Songs Queued: <code>{settings['stats']['total_queue_added']}</code>\n"
+        f"📻 In Queue: <code>{queue_length}</code>\n"
+        f"👥 Admins: <code>{len(settings['admins'])}</code>\n"
+        f"🚫 Banned: <code>{len(settings['banned_users'])}</code>\n\n"
+        f"👨‍💻 <b>Dev:</b> @secret_fetcher",
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -310,14 +336,14 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     await update.message.reply_text(
         f"╔══════════════════╗\n"
-        f"║  🎧  *{esc(BOT_NAME)}*  🎧  ║\n"
+        f"║  🎧  <b>MUSIC BOT</b>  🎧  ║\n"
         f"╚══════════════════╝\n\n"
         f"✅ YouTube streaming\n"
         f"✅ Queue management\n"
         f"✅ Group controls\n"
         f"✅ 24/7 on Railway\n\n"
-        f"👨‍💻 *Dev:* {DEVELOPER}",
-        parse_mode="MarkdownV2",
+        f"👨‍💻 <b>Dev:</b> @secret_fetcher",
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -326,8 +352,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Error: {context.error}")
     try:
         await update.message.reply_text(
-            "❌ Something went wrong\\. Please try again\\.",
-            parse_mode="MarkdownV2"
+            "❌ Something went wrong. Please try again."
         )
     except Exception:
         pass
