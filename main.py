@@ -22,37 +22,18 @@ from config import (
 )
 
 from handlers.music_commands import (
-    play,
-    play_next,
-    skip,
-    queue_display,
-    clear_queue_cmd,
-    shuffle_queue_cmd,
-    remove_song,
+    play, play_next, skip, queue_display,
+    clear_queue_cmd, shuffle_queue_cmd, remove_song,
     music_button_callback,
 )
-
 from handlers.group_commands import (
-    init_group,
-    group_info,
-    add_admin,
-    remove_admin,
-    ban_user_cmd,
-    unban_user_cmd,
-    set_prefix_cmd,
-    set_queue_limit_cmd,
+    init_group, group_info, add_admin, remove_admin,
+    ban_user_cmd, unban_user_cmd, set_prefix_cmd, set_queue_limit_cmd,
 )
-
 from handlers.utility_commands import (
-    start,
-    help_cmd,
-    ask_assistant,
-    stats,
-    about,
-    error_handler,
-    util_button_callback,
+    start, help_cmd, ask_assistant, stats, about,
+    error_handler, util_button_callback,
 )
-
 from handlers.broadcast_commands import broadcast_message
 from utils.mongodb_manager import mongo_manager
 from utils.pyrogram_client import pyrogram_client
@@ -65,20 +46,36 @@ logger = logging.getLogger(__name__)
 
 
 async def post_init(application: Application) -> None:
+    # MongoDB
     try:
         await mongo_manager.connect()
         await mongo_manager.create_indexes()
         logger.info("✅ MongoDB initialized")
     except Exception as e:
-        logger.error(f"❌ MongoDB initialization failed: {e}")
+        logger.error(f"❌ MongoDB failed: {e}")
         sys.exit(1)
 
+    # Pyrogram
     try:
         connected = await pyrogram_client.connect()
         if connected:
-            logger.info("✅ Pyrogram assistant account ready for music streaming")
+            logger.info("✅ Pyrogram assistant ready")
+        else:
+            logger.warning("⚠️ Pyrogram not connected")
     except Exception as e:
-        logger.warning(f"⚠️  Pyrogram client not available: {e}")
+        logger.warning(f"⚠️ Pyrogram error: {e}")
+
+    # PyTgCalls for voice streaming
+    try:
+        if pyrogram_client.client:
+            from utils.voice_chat import init_pytgcalls
+            success = await init_pytgcalls(pyrogram_client.client)
+            if success:
+                logger.info("✅ Voice chat streaming ready")
+            else:
+                logger.warning("⚠️ Voice chat not available")
+    except Exception as e:
+        logger.warning(f"⚠️ PyTgCalls error: {e}")
 
     logger.info("✅ Bot initialization complete!")
 
@@ -87,9 +84,8 @@ async def shutdown(application: Application) -> None:
     try:
         await mongo_manager.disconnect()
         await pyrogram_client.disconnect()
-        logger.info("✅ All connections closed")
     except Exception as e:
-        logger.error(f"Error during shutdown: {e}")
+        logger.error(f"Shutdown error: {e}")
 
 
 def main():
@@ -104,7 +100,7 @@ def main():
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # Music commands
+    # Music
     application.add_handler(CommandHandler("play", play))
     application.add_handler(CommandHandler("next", play_next))
     application.add_handler(CommandHandler("skip", skip))
@@ -113,7 +109,7 @@ def main():
     application.add_handler(CommandHandler("clear_queue", clear_queue_cmd))
     application.add_handler(CommandHandler("remove", remove_song))
 
-    # Group commands
+    # Group
     application.add_handler(CommandHandler("init", init_group))
     application.add_handler(CommandHandler("info", group_info))
     application.add_handler(CommandHandler("admin_add", add_admin))
@@ -123,30 +119,24 @@ def main():
     application.add_handler(CommandHandler("set_prefix", set_prefix_cmd))
     application.add_handler(CommandHandler("queue_limit", set_queue_limit_cmd))
 
-    # Utility commands
+    # Utility
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_cmd))
     application.add_handler(CommandHandler("ask", ask_assistant))
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CommandHandler("about", about))
-
-    # Owner command
     application.add_handler(CommandHandler("broadcast", broadcast_message))
 
-    # Button callbacks
-    application.add_handler(CallbackQueryHandler(music_button_callback, pattern="^btn_"))
+    # Callbacks
+    application.add_handler(CallbackQueryHandler(music_button_callback, pattern="^mc_"))
     application.add_handler(CallbackQueryHandler(util_button_callback, pattern="^util_"))
-    application.add_handler(CallbackQueryHandler(util_button_callback, pattern="^(show_|back_|how_to_play)"))
 
-    # Debug log
-    async def log_all_updates(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        logging.getLogger("__main__").info(f"[DEBUG] Received update: {update}")
-    application.add_handler(MessageHandler(filters.ALL, log_all_updates), group=-100)
+    # Debug
+    async def log_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        logger.info(f"[DEBUG] Received update: {update}")
+    application.add_handler(MessageHandler(filters.ALL, log_all), group=-100)
 
-    # Error handler
     application.add_error_handler(error_handler)
-
-    # Lifecycle
     application.post_init = post_init
     application.post_stop = shutdown
 
