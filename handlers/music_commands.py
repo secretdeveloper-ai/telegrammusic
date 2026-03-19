@@ -13,32 +13,39 @@ queue_manager = MongoQueueManager()
 gpt_assistant = GPTAssistant()
 
 
+def format_duration(seconds: int) -> str:
+    """Format seconds to mm:ss"""
+    if not seconds:
+        return "0:00"
+    minutes = int(seconds) // 60
+    secs = int(seconds) % 60
+    return f"{minutes}:{secs:02d}"
+
+
 async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Play a song"""
     if not context.args:
         await update.message.reply_text(
-            "🎵 **Play Song**\n\n"
-            "Usage: `/play <song name or URL>`\n\n"
+            "🎵 Usage: /play song name\n\n"
             "Examples:\n"
-            "• `/play Bohemian Rhapsody Queen`\n"
-            "• `/play https://www.youtube.com/watch?v=...`\n"
-            "• `/play https://open.spotify.com/track/...`",
-            parse_mode="Markdown"
+            "• /play Tum Hi Aana\n"
+            "• /play Humsafar\n"
+            "• /play Shape of You"
         )
         return
 
     query = " ".join(context.args)
     await update.message.chat.send_action(ChatAction.TYPING)
 
-    # Get AI suggestion for search
+    # Get better search query from AI (falls back to original if no key)
     search_query = await gpt_assistant.suggest_song_search(query)
 
-    # Fetch music
-    song_data = await music_fetcher.search_music(search_query, source="both")
+    # Search for song
+    song_data = await music_fetcher.search_music(search_query)
 
     if not song_data:
         await update.message.reply_text(
-            "❌ Could not find that song. Try a different search term."
+            f"❌ Could not find: {query}\n\nTry a different search term."
         )
         return
 
@@ -46,47 +53,56 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     group_id = update.effective_chat.id
     requester_id = update.effective_user.id
 
-    if await queue_manager.add_song(group_id, song_data, requester_id):
-        # Get AI info about the song
+    added = await queue_manager.add_song(group_id, song_data, requester_id)
+
+    if added:
+        duration = song_data.get("duration", 0)
+        duration_str = format_duration(duration)
+        queue_length = await queue_manager.get_queue_length(group_id)
         song_info = await gpt_assistant.get_song_info(song_data)
 
-        queue_length = await queue_manager.get_queue_length(group_id)
+        title = song_data.get("title", "Unknown")[:80]
+        source = song_data.get("source", "YouTube")
+        webpage_url = song_data.get("webpage_url", "")
+
         message = (
-            f"✅ Added to queue:\n\n"
-            f"🎵 **{song_data['title'][:100]}**\n"
-            f"⏱️ Duration: {song_data['duration']}s\n"
-            f"📍 Source: {song_data['source']}\n"
-            f"📊 Queue position: {queue_length}\n\n"
-            f"ℹ️ {song_info}"
+            f"✅ Added to queue!\n\n"
+            f"🎵 {title}\n"
+            f"⏱ Duration: {duration_str}\n"
+            f"📍 Source: {source}\n"
+            f"📊 Position: #{queue_length}\n"
         )
-        await update.message.reply_text(message, parse_mode="Markdown")
+        if webpage_url:
+            message += f"🔗 {webpage_url}\n"
+        message += f"\n{song_info}"
+
+        await update.message.reply_text(message)
     else:
         await update.message.reply_text(
-            "❌ Queue is full! Please wait for some songs to finish."
+            "❌ Queue is full! Use /skip or /clear_queue first."
         )
 
 
 async def play_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Get next song that's about to play"""
+    """Show next song in queue"""
     group_id = update.effective_chat.id
     next_song = await queue_manager.peek_next_song(group_id)
 
     if not next_song:
-        await update.message.reply_text("🎵 No songs in queue!")
+        await update.message.reply_text("🎵 Queue is empty!")
         return
 
     duration = next_song.get("duration", 0)
-    minutes = duration // 60
-    seconds = duration % 60
+    duration_str = format_duration(duration)
+    title = next_song.get("title", "Unknown")[:80]
 
     message = (
-        f"▶️ **Next Song:**\n\n"
-        f"🎵 {next_song['title']}\n"
-        f"⏱️ Duration: {minutes}:{seconds:02d}\n"
-        f"📍 Source: {next_song['source']}\n"
-        f"👤 Requested by: User {next_song.get('requester_id', 'Unknown')}"
+        f"▶️ Next Song:\n\n"
+        f"🎵 {title}\n"
+        f"⏱ Duration: {duration_str}\n"
+        f"📍 Source: {next_song.get('source', 'YouTube')}"
     )
-    await update.message.reply_text(message, parse_mode="Markdown")
+    await update.message.reply_text(message)
 
 
 async def skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -95,36 +111,49 @@ async def skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     next_song = await queue_manager.get_next_song(group_id)
 
     if not next_song:
-        await update.message.reply_text("🎵 No songs in queue to skip!")
+        await update.message.reply_text("🎵 No songs in queue!")
         return
 
     duration = next_song.get("duration", 0)
-    minutes = duration // 60
-    seconds = duration % 60
+    duration_str = format_duration(duration)
+    title = next_song.get("title", "Unknown")[:80]
 
     message = (
-        f"⏭️ **Skipped!** Now playing:\n\n"
-        f"🎵 {next_song['title']}\n"
-        f"⏱️ Duration: {minutes}:{seconds:02d}\n"
-        f"📍 Source: {next_song['source']}"
+        f"⏭️ Skipped!\n\n"
+        f"🎵 {title}\n"
+        f"⏱ Duration: {duration_str}\n"
+        f"📍 Source: {next_song.get('source', 'YouTube')}"
     )
-    await update.message.reply_text(message, parse_mode="Markdown")
+    await update.message.reply_text(message)
 
 
 async def queue_display(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Display current queue"""
     group_id = update.effective_chat.id
-    display = await queue_manager.get_queue_display(group_id, limit=10)
-    await update.message.reply_text(display, parse_mode="Markdown")
+    queue = await queue_manager.get_queue(group_id)
+
+    if not queue:
+        await update.message.reply_text("🎵 Queue is empty!\n\nUse /play to add songs.")
+        return
+
+    display = f"🎵 Queue ({len(queue)} songs):\n\n"
+    for i, song in enumerate(queue[:10], 1):
+        title = song.get("title", "Unknown")[:50]
+        duration = song.get("duration", 0)
+        duration_str = format_duration(duration)
+        display += f"{i}. {title} ({duration_str})\n"
+
+    if len(queue) > 10:
+        display += f"\n... and {len(queue) - 10} more songs"
+
+    await update.message.reply_text(display)
 
 
 async def clear_queue_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Clear entire queue"""
     group_id = update.effective_chat.id
     count = await queue_manager.clear_queue(group_id)
-    await update.message.reply_text(
-        f"🗑️ Cleared {count} songs from queue!"
-    )
+    await update.message.reply_text(f"🗑️ Cleared {count} songs from queue!")
 
 
 async def shuffle_queue_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -134,31 +163,31 @@ async def shuffle_queue_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await queue_manager.shuffle_queue(group_id):
         await update.message.reply_text("🔀 Queue shuffled!")
     else:
-        await update.message.reply_text("❌ Can't shuffle empty queue!")
+        await update.message.reply_text("❌ Not enough songs to shuffle!")
 
 
 async def remove_song(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Remove specific song from queue"""
     if not context.args:
         await update.message.reply_text(
-            "Usage: `/remove <position>`\n"
-            "Example: `/remove 1` (removes first song)",
-            parse_mode="Markdown"
+            "Usage: /remove position\n"
+            "Example: /remove 2"
         )
         return
 
     try:
         position = int(context.args[0]) - 1
-        group_id = update.effective_chat.id
+        if position < 0:
+            await update.message.reply_text("❌ Position must be 1 or higher!")
+            return
 
+        group_id = update.effective_chat.id
         song = await queue_manager.remove_song(group_id, position)
+
         if song:
-            await update.message.reply_text(
-                f"❌ Removed: **{song['title'][:100]}**",
-                parse_mode="Markdown"
-            )
+            title = song.get("title", "Unknown")[:60]
+            await update.message.reply_text(f"❌ Removed: {title}")
         else:
-            await update.message.reply_text("❌ Invalid position!")
+            await update.message.reply_text("❌ Invalid position! Use /queue to see positions.")
     except ValueError:
         await update.message.reply_text("❌ Please provide a valid number!")
-
