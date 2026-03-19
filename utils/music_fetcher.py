@@ -18,7 +18,6 @@ class MusicFetcher:
             "quiet": True,
             "no_warnings": True,
             "socket_timeout": 30,
-            "source_address": "0.0.0.0",
             "http_headers": {
                 "User-Agent": "com.google.android.youtube/17.36.4 (Linux; U; Android 12; GB) gzip",
                 "Accept-Language": "en-US,en;q=0.9",
@@ -31,7 +30,7 @@ class MusicFetcher:
         }
 
         self.spotify_client = None
-        if SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET:
+        if SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET and SPOTIFY_CLIENT_ID.strip() and SPOTIFY_CLIENT_SECRET.strip():
             try:
                 import spotipy
                 from spotipy.oauth2 import SpotifyClientCredentials
@@ -44,78 +43,71 @@ class MusicFetcher:
             except Exception as e:
                 logger.warning(f"Spotify init failed: {e}")
         else:
-            logger.warning("Spotify credentials not provided, skipping")
+            logger.info("Spotify not configured, using YouTube only")
+
+    def _format_duration(self, seconds: int) -> str:
+        """Format seconds to mm:ss"""
+        if not seconds:
+            return "0:00"
+        minutes = seconds // 60
+        secs = seconds % 60
+        return f"{minutes}:{secs:02d}"
 
     async def search_youtube(self, query: str) -> Optional[Dict]:
-        """Search and fetch song from YouTube"""
+        """Search and fetch song info from YouTube"""
         try:
             search_query = f"ytsearch1:{query}"
             with yt_dlp.YoutubeDL(self.yt_dlp_opts) as ydl:
                 info = ydl.extract_info(search_query, download=False)
 
-                if "entries" in info and info["entries"]:
-                    info = info["entries"][0]
+                if not info:
+                    return None
+
+                # Extract from search results
+                if "entries" in info:
+                    entries = info.get("entries", [])
+                    if not entries:
+                        return None
+                    info = entries[0]
 
                 if not info:
                     return None
 
-                duration = info.get("duration", 0)
+                duration = info.get("duration") or 0
+
+                # Skip if too long
                 if duration and duration > MAX_SONG_DURATION:
+                    logger.warning(f"Song too long: {duration}s")
                     return None
 
+                title = info.get("title", "Unknown")
+                video_id = info.get("id", "")
+                webpage_url = info.get("webpage_url") or f"https://www.youtube.com/watch?v={video_id}"
+                audio_url = info.get("url", "")
+
+                logger.info(f"Found: {title} | Duration: {duration}s | ID: {video_id}")
+
                 return {
-                    "title": info.get("title", "Unknown"),
-                    "url": info.get("url", ""),
-                    "webpage_url": info.get("webpage_url", ""),
-                    "duration": duration or 0,
+                    "title": title,
+                    "url": audio_url,
+                    "webpage_url": webpage_url,
+                    "duration": duration,
+                    "duration_str": self._format_duration(duration),
                     "thumbnail": info.get("thumbnail", ""),
                     "source": "YouTube",
-                    "video_id": info.get("id", ""),
+                    "video_id": video_id,
+                    "uploader": info.get("uploader", ""),
                 }
         except Exception as e:
             logger.error(f"YouTube search error: {e}")
             return None
 
-    async def search_spotify(self, query: str) -> Optional[Dict]:
-        """Search Spotify then fetch from YouTube"""
-        if not self.spotify_client:
-            return None
-
-        try:
-            results = self.spotify_client.search(q=query, type="track", limit=1)
-            tracks = results.get("tracks", {}).get("items", [])
-
-            if not tracks:
-                return None
-
-            track = tracks[0]
-            duration = track.get("duration_ms", 0) // 1000
-
-            if duration > MAX_SONG_DURATION:
-                return None
-
-            artists = ", ".join([a["name"] for a in track.get("artists", [])])
-            song_name = f"{track['name']} {artists}"
-
-            youtube_result = await self.search_youtube(song_name)
-            if youtube_result:
-                return {
-                    **youtube_result,
-                    "source": "Spotify+YouTube",
-                    "spotify_id": track.get("id", ""),
-                }
-            return None
-
-        except Exception as e:
-            logger.error(f"Spotify search error: {e}")
-            return None
-
     async def search_music(self, query: str, source: str = "both") -> Optional[Dict]:
-        """Search music - tries YouTube directly"""
+        """Search music - uses YouTube directly"""
         return await self.search_youtube(query)
 
     async def get_playlist_youtube(self, playlist_url: str) -> List[Dict]:
-        """Fetch multiple songs from YouTube playlist"""
+        """Fetch songs from YouTube playlist"""
         try:
             opts = {
                 **self.yt_dlp_opts,
@@ -124,12 +116,12 @@ class MusicFetcher:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(playlist_url, download=False)
                 songs = []
-
                 for entry in info.get("entries", [])[:20]:
-                    song_result = await self.search_youtube(entry.get("url", ""))
-                    if song_result:
-                        songs.append(song_result)
-
+                    url = entry.get("url") or entry.get("id", "")
+                    if url:
+                        song_result = await self.search_youtube(url)
+                        if song_result:
+                            songs.append(song_result)
                 return songs
         except Exception as e:
             logger.error(f"Playlist fetch error: {e}")
