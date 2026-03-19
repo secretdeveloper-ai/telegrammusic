@@ -14,7 +14,7 @@ async def init_pytgcalls(pyrogram_client: Client):
     global _pytgcalls
     try:
         from pytgcalls import PyTgCalls
-        from pytgcalls.types import AudioPiped
+        from pytgcalls.types.input_stream import AudioPiped
         from pytgcalls.types.input_stream.quality import HighQualityAudio
 
         _pytgcalls = PyTgCalls(pyrogram_client)
@@ -24,7 +24,6 @@ async def init_pytgcalls(pyrogram_client: Client):
             chat_id = update.chat_id
             if chat_id in _now_playing:
                 del _now_playing[chat_id]
-            logger.info(f"Stream ended in {chat_id}")
 
         await _pytgcalls.start()
         logger.info("✅ PyTgCalls voice streaming ready")
@@ -66,7 +65,7 @@ async def _play_stream(chat_id: int, song_data: dict) -> bool:
     if not _pytgcalls:
         return False
     try:
-        from pytgcalls.types import AudioPiped
+        from pytgcalls.types.input_stream import AudioPiped
         from pytgcalls.types.input_stream.quality import HighQualityAudio
 
         audio_url = song_data.get("stream_url") or song_data.get("url", "")
@@ -126,7 +125,7 @@ async def voice_play(chat_id: int, query: str, song_data: dict = None) -> dict:
             "duration": play_data.get("duration", 0),
         }
     else:
-        return {"success": False, "msg": "Voice chat active nahi hai! Pehle group mein Voice Chat start karo."}
+        return {"success": False, "msg": "⚠️ Pehle group mein Voice Chat start karo!"}
 
 
 async def voice_skip(chat_id: int, song_data: dict = None) -> dict:
@@ -181,3 +180,12 @@ def get_now_playing(chat_id: int) -> Optional[dict]:
 
 def is_voice_available() -> bool:
     return _pytgcalls is not None
+```
+
+**Commit karo → Railway automatically redeploy karega.**
+
+---
+
+Deploy hone ke baad Railway logs mein ye line aani chahiye:
+```
+✅ PyTgCalls voice streaming ready
