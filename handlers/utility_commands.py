@@ -3,40 +3,62 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from utils.claude_assistant import GPTAssistant
-from config import SUPPORT_CHAT, BOT_NAME
+from config import SUPPORT_CHAT, BOT_NAME, OWNER_ID
 
 logger = logging.getLogger(__name__)
 gpt_assistant = GPTAssistant()
 
+DEVELOPER = "@secret_fetcher"
 
-def safe_md(text: str) -> str:
-    special = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
-    for ch in special:
+
+def esc(text: str) -> str:
+    """Escape MarkdownV2 special chars"""
+    for ch in r'\_*[]()~`>#+-=|{}.!':
         text = text.replace(ch, f'\\{ch}')
     return text
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start command with attractive UI and user tagging"""
     user = update.effective_user
-    logger.info(f"/start from user_id={user.id}, chat_id={update.effective_chat.id}")
+    chat = update.effective_chat
+    logger.info(f"/start from user_id={user.id}, chat_id={chat.id}")
 
-    user_mention = f"[{safe_md(user.first_name)}](tg://user?id={user.id})"
+    user_mention = f"[{esc(user.first_name)}](tg://user?id={user.id})"
+    chat_type = "Private" if chat.type == "private" else f"Group: {esc(chat.title or 'Unknown')}"
+
+    # Notify owner
+    try:
+        await context.bot.send_message(
+            chat_id=OWNER_ID,
+            text=(
+                f"🔔 *New User Started Bot\\!*\n\n"
+                f"👤 User: [{esc(user.first_name)}](tg://user?id={user.id})\n"
+                f"🆔 User ID: `{user.id}`\n"
+                f"📱 Username: @{esc(user.username or 'none')}\n"
+                f"💬 Chat: {chat_type}\n"
+                f"🆔 Chat ID: `{chat.id}`"
+            ),
+            parse_mode="MarkdownV2"
+        )
+    except Exception as e:
+        logger.warning(f"Could not notify owner: {e}")
 
     welcome_text = (
-        f"🎵 *Hey {user_mention}\\! Welcome to {safe_md(BOT_NAME)}*\n\n"
-        "┌─────────────────────┐\n"
-        "│  🎧 *MUSIC BOT*  │\n"
-        "│  Your Music Partner  │\n"
-        "└─────────────────────┘\n\n"
-        "🌟 *Features:*\n"
-        "╠ 🎵 Play from YouTube\n"
-        "╠ 📋 Queue management\n"
-        "╠ 🔀 Shuffle & skip\n"
-        "╠ 👥 Group admin tools\n"
-        "╠ 📊 Usage statistics\n"
-        "╚ 📢 Owner broadcast\n\n"
-        "👇 *Tap a button to get started\\!*"
+        f"🎵 *Hey {user_mention}\\!*\n\n"
+        f"╔══════════════════╗\n"
+        f"║  🎧  *{esc(BOT_NAME)}*  🎧  ║\n"
+        f"╚══════════════════╝\n\n"
+        f"✨ *Your Premium Music Experience*\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🎵  Stream from YouTube\n"
+        f"📋  Smart queue system\n"
+        f"🔀  Shuffle & skip anytime\n"
+        f"👥  Group admin controls\n"
+        f"📊  Live statistics\n"
+        f"📢  Owner broadcasts\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👨‍💻 *Dev:* {DEVELOPER}\n\n"
+        f"👇 *Choose an option below*"
     )
 
     keyboard = [
@@ -49,7 +71,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("ℹ️ About", callback_data="util_about"),
         ],
         [
-            InlineKeyboardButton("💬 Support Chat", url=SUPPORT_CHAT),
+            InlineKeyboardButton("💬 Support", url=SUPPORT_CHAT),
         ],
     ]
 
@@ -61,41 +83,38 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Help with buttons"""
     help_text = (
-        "📖 *COMMANDS LIST*\n\n"
-        "━━━━━━━━━━━━━━━━\n"
-        "🎵 *MUSIC*\n"
-        "━━━━━━━━━━━━━━━━\n"
-        "▶️ `/play` \\<song\\>\n"
-        "⏭️ `/skip` — Skip song\n"
-        "⏩ `/next` — Next info\n"
-        "📋 `/queue` — View queue\n"
-        "🔀 `/shuffle` — Shuffle\n"
-        "❌ `/remove` \\<pos\\>\n"
-        "🗑️ `/clear\\_queue`\n\n"
-        "━━━━━━━━━━━━━━━━\n"
-        "👥 *ADMIN*\n"
-        "━━━━━━━━━━━━━━━━\n"
-        "⚙️ `/init` — Setup\n"
-        "ℹ️ `/info` — Group info\n"
-        "👑 `/admin\\_add` \\<id\\>\n"
-        "🚫 `/ban` \\<id\\>\n"
-        "✅ `/unban` \\<id\\>\n"
-        "🔤 `/set\\_prefix` \\<char\\>\n"
-        "🔢 `/queue\\_limit` \\<num\\>\n\n"
-        "━━━━━━━━━━━━━━━━\n"
-        "👤 *OWNER ONLY*\n"
-        "━━━━━━━━━━━━━━━━\n"
-        "📢 `/broadcast` \\<msg\\>"
+        f"📖 *{esc(BOT_NAME)} — Commands*\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🎵 *MUSIC*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"▶️ `/play` \\<song\\>\n"
+        f"⏭️ `/skip` — Skip song\n"
+        f"⏩ `/next` — Next info\n"
+        f"📋 `/queue` — View queue\n"
+        f"🔀 `/shuffle` — Shuffle\n"
+        f"❌ `/remove` \\<pos\\>\n"
+        f"🗑️ `/clear\\_queue`\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"👥 *ADMIN*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"⚙️ `/init` — Setup group\n"
+        f"ℹ️ `/info` — Group info\n"
+        f"👑 `/admin\\_add` \\<id\\>\n"
+        f"🚫 `/ban` \\<id\\>\n"
+        f"✅ `/unban` \\<id\\>\n"
+        f"🔤 `/set\\_prefix` \\<char\\>\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 *OWNER ONLY*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📢 `/broadcast` \\<msg\\>\n\n"
+        f"👨‍💻 *Dev:* {DEVELOPER}"
     )
 
     keyboard = [
+        [InlineKeyboardButton("🎵 Play Music", switch_inline_query_current_chat="/play ")],
         [
-            InlineKeyboardButton("🎵 Play Music", switch_inline_query_current_chat="/play "),
-        ],
-        [
-            InlineKeyboardButton("📋 View Queue", callback_data="util_queue"),
+            InlineKeyboardButton("📋 Queue", callback_data="util_queue"),
             InlineKeyboardButton("💬 Support", url=SUPPORT_CHAT),
         ],
     ]
@@ -108,40 +127,43 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def util_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle utility button presses"""
     query = update.callback_query
     await query.answer()
 
+    def back_btn():
+        return [[InlineKeyboardButton("🔙 Back", callback_data="util_back")]]
+
     if query.data == "util_commands":
         text = (
-            "🎵 *Quick Commands:*\n\n"
-            "▶️ `/play` \\<song name\\>\n"
-            "📋 `/queue` — View queue\n"
-            "⏭️ `/skip` — Skip song\n"
-            "🔀 `/shuffle` — Shuffle\n"
-            "🗑️ `/clear\\_queue` — Clear\n"
-            "📊 `/stats` — Statistics\n"
-            "ℹ️ `/info` — Group info"
+            f"🎵 *Quick Commands:*\n\n"
+            f"▶️ `/play` \\<song name\\>\n"
+            f"📋 `/queue` — View queue\n"
+            f"⏭️ `/skip` — Skip song\n"
+            f"🔀 `/shuffle` — Shuffle\n"
+            f"🗑️ `/clear\\_queue` — Clear all\n"
+            f"📊 `/stats` — Statistics\n"
+            f"ℹ️ `/info` — Group info\n\n"
+            f"👨‍💻 *Dev:* {DEVELOPER}"
         )
-        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="util_back")]]
-        await query.edit_message_text(text, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.edit_message_text(text, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(back_btn()))
 
     elif query.data == "util_howto":
         text = (
-            "❓ *How to Use:*\n\n"
-            "*Step 1:* Add bot to your group\n"
-            "*Step 2:* Type `/init` to setup\n"
-            "*Step 3:* Type `/play Tum Hi Aana`\n"
-            "*Step 4:* Song added to queue\\!\n\n"
-            "💡 *Tips:*\n"
-            "• Use full song name for best results\n"
-            "• Add artist name for accuracy\n"
-            "• `/queue` to see all songs\n"
-            "• `/shuffle` for random order\n"
-            "• Admins can `/ban` spammers"
+            f"❓ *How to Use:*\n\n"
+            f"*Step 1️⃣* — Add bot to your group\n"
+            f"*Step 2️⃣* — Type `/init` to setup\n"
+            f"*Step 3️⃣* — Type `/play Tum Hi Aana`\n"
+            f"*Step 4️⃣* — Song added to queue\\!\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"💡 *Pro Tips:*\n"
+            f"• Use full song name for best results\n"
+            f"• Add artist name for accuracy\n"
+            f"• `/queue` to see all songs\n"
+            f"• `/shuffle` for random play\n"
+            f"• Admins can `/ban` spammers\n\n"
+            f"👨‍💻 *Dev:* {DEVELOPER}"
         )
-        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="util_back")]]
-        await query.edit_message_text(text, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.edit_message_text(text, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(back_btn()))
 
     elif query.data == "util_stats":
         from utils.mongo_queue_manager import MongoQueueManager
@@ -153,12 +175,13 @@ async def util_button_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         queue_len = await qm.get_queue_length(chat_id)
 
         text = (
-            "📊 *Statistics*\n\n"
+            f"📊 *Statistics*\n\n"
             f"🎵 Songs Played: `{settings['stats']['total_songs_played']}`\n"
             f"➕ Songs Queued: `{settings['stats']['total_queue_added']}`\n"
             f"📻 In Queue Now: `{queue_len}`\n"
             f"👥 Admins: `{len(settings['admins'])}`\n"
-            f"🚫 Banned Users: `{len(settings['banned_users'])}`"
+            f"🚫 Banned Users: `{len(settings['banned_users'])}`\n\n"
+            f"👨‍💻 *Dev:* {DEVELOPER}"
         )
         keyboard = [
             [InlineKeyboardButton("🔄 Refresh", callback_data="util_stats")],
@@ -168,16 +191,21 @@ async def util_button_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     elif query.data == "util_about":
         text = (
-            f"🎵 *{safe_md(BOT_NAME)}*\n\n"
-            "A powerful music bot for Telegram groups\\!\n\n"
-            "✅ YouTube music streaming\n"
-            "✅ Smart queue management\n"
-            "✅ Group admin controls\n"
-            "✅ Usage statistics\n"
-            "✅ Owner broadcast\n"
-            "✅ MongoDB database\n\n"
-            "🚀 Hosted on Railway\n"
-            "💾 Powered by MongoDB"
+            f"╔══════════════════╗\n"
+            f"║  🎧  *{esc(BOT_NAME)}*  🎧  ║\n"
+            f"╚══════════════════╝\n\n"
+            f"🌟 *Premium Music Bot*\n\n"
+            f"✅ YouTube streaming\n"
+            f"✅ Smart queue system\n"
+            f"✅ Group admin controls\n"
+            f"✅ Live statistics\n"
+            f"✅ Owner broadcasts\n"
+            f"✅ MongoDB database\n"
+            f"✅ 24/7 on Railway\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"👨‍💻 *Developer:* {DEVELOPER}\n"
+            f"🚀 *Hosted:* Railway\n"
+            f"💾 *Database:* MongoDB"
         )
         keyboard = [
             [InlineKeyboardButton("💬 Support", url=SUPPORT_CHAT)],
@@ -192,38 +220,39 @@ async def util_button_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         queue = await qm.get_queue(chat_id)
 
         if not queue:
-            text = "📋 *Queue is empty\\!*\n\nUse `/play song name` to add songs\\."
+            text = f"📋 *Queue is empty\\!*\n\nUse `/play song name` to add songs\\.\n\n👨‍💻 *Dev:* {DEVELOPER}"
         else:
-            text = f"📋 *Queue \\({len(queue)} songs\\):*\n\n"
+            text = f"📋 *Queue — {len(queue)} song{'s' if len(queue) > 1 else ''}*\n\n"
             for i, song in enumerate(queue[:8], 1):
-                title = safe_md(song.get("title", "Unknown")[:40])
+                title = esc(song.get("title", "Unknown")[:38])
                 dur = song.get("duration", 0)
                 s = int(dur)
                 dur_str = f"{s // 60}:{s % 60:02d}"
-                text += f"`{i}.` {title} \\| `{dur_str}`\n"
+                text += f"`{i}\\.` {title} — `{dur_str}`\n"
             if len(queue) > 8:
-                text += f"\n_\\+{len(queue) - 8} more_"
+                text += f"\n_\\+{len(queue) - 8} more songs_"
 
-        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="util_back")]]
-        await query.edit_message_text(text, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.edit_message_text(text, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(back_btn()))
 
     elif query.data == "util_back":
         user = query.from_user
-        user_mention = f"[{safe_md(user.first_name)}](tg://user?id={user.id})"
+        user_mention = f"[{esc(user.first_name)}](tg://user?id={user.id})"
         text = (
-            f"🎵 *Hey {user_mention}\\! Welcome to {safe_md(BOT_NAME)}*\n\n"
-            "┌─────────────────────┐\n"
-            "│  🎧 *MUSIC BOT*  │\n"
-            "│  Your Music Partner  │\n"
-            "└─────────────────────┘\n\n"
-            "🌟 *Features:*\n"
-            "╠ 🎵 Play from YouTube\n"
-            "╠ 📋 Queue management\n"
-            "╠ 🔀 Shuffle & skip\n"
-            "╠ 👥 Group admin tools\n"
-            "╠ 📊 Usage statistics\n"
-            "╚ 📢 Owner broadcast\n\n"
-            "👇 *Tap a button to get started\\!*"
+            f"🎵 *Hey {user_mention}\\!*\n\n"
+            f"╔══════════════════╗\n"
+            f"║  🎧  *{esc(BOT_NAME)}*  🎧  ║\n"
+            f"╚══════════════════╝\n\n"
+            f"✨ *Your Premium Music Experience*\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎵  Stream from YouTube\n"
+            f"📋  Smart queue system\n"
+            f"🔀  Shuffle & skip anytime\n"
+            f"👥  Group admin controls\n"
+            f"📊  Live statistics\n"
+            f"📢  Owner broadcasts\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"👨‍💻 *Dev:* {DEVELOPER}\n\n"
+            f"👇 *Choose an option below*"
         )
         keyboard = [
             [
@@ -235,7 +264,7 @@ async def util_button_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 InlineKeyboardButton("ℹ️ About", callback_data="util_about"),
             ],
             [
-                InlineKeyboardButton("💬 Support Chat", url=SUPPORT_CHAT),
+                InlineKeyboardButton("💬 Support", url=SUPPORT_CHAT),
             ],
         ]
         await query.edit_message_text(text, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -248,7 +277,7 @@ async def ask_assistant(update: Update, context: ContextTypes.DEFAULT_TYPE):
     question = " ".join(context.args)
     await update.message.chat.send_action("typing")
     response = await gpt_assistant.get_response(question)
-    await update.message.reply_text(safe_md(response), parse_mode="MarkdownV2")
+    await update.message.reply_text(esc(response), parse_mode="MarkdownV2")
 
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -262,12 +291,13 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [[InlineKeyboardButton("🔄 Refresh", callback_data="util_stats")]]
     await update.message.reply_text(
-        f"📊 *Group Statistics*\n\n"
+        f"📊 *Statistics*\n\n"
         f"🎵 Songs Played: `{settings['stats']['total_songs_played']}`\n"
         f"➕ Songs Queued: `{settings['stats']['total_queue_added']}`\n"
         f"📻 In Queue: `{queue_length}`\n"
         f"👥 Admins: `{len(settings['admins'])}`\n"
-        f"🚫 Banned: `{len(settings['banned_users'])}`",
+        f"🚫 Banned: `{len(settings['banned_users'])}`\n\n"
+        f"👨‍💻 *Dev:* {DEVELOPER}",
         parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -275,30 +305,28 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [
-            InlineKeyboardButton("💬 Support", url=SUPPORT_CHAT),
-            InlineKeyboardButton("📋 Commands", callback_data="util_commands"),
-        ]
+        [InlineKeyboardButton("💬 Support", url=SUPPORT_CHAT),
+         InlineKeyboardButton("📋 Commands", callback_data="util_commands")],
     ]
     await update.message.reply_text(
-        f"🎵 *{safe_md(BOT_NAME)}*\n\n"
-        "A powerful music bot for Telegram groups\\!\n\n"
-        "✅ YouTube music streaming\n"
-        "✅ Queue management\n"
-        "✅ Group permissions\n"
-        "✅ Statistics tracking\n"
-        "✅ Owner broadcast\n\n"
-        "🚀 Hosted on Railway",
+        f"╔══════════════════╗\n"
+        f"║  🎧  *{esc(BOT_NAME)}*  🎧  ║\n"
+        f"╚══════════════════╝\n\n"
+        f"✅ YouTube streaming\n"
+        f"✅ Queue management\n"
+        f"✅ Group controls\n"
+        f"✅ 24/7 on Railway\n\n"
+        f"👨‍💻 *Dev:* {DEVELOPER}",
         parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.error(f"Update {update} caused error {context.error}")
+    logger.error(f"Error: {context.error}")
     try:
         await update.message.reply_text(
-            "❌ An error occurred\\. Please try again or use /help",
+            "❌ Something went wrong\\. Please try again\\.",
             parse_mode="MarkdownV2"
         )
     except Exception:
