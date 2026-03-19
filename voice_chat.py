@@ -14,8 +14,7 @@ async def init_pytgcalls(pyrogram_client: Client):
     global _pytgcalls
     try:
         from pytgcalls import PyTgCalls
-        from pytgcalls.types.input_stream import AudioPiped
-        from pytgcalls.types.input_stream.quality import HighQualityAudio
+        from pytgcalls.types import MediaStream
 
         _pytgcalls = PyTgCalls(pyrogram_client)
 
@@ -65,14 +64,13 @@ async def _play_stream(chat_id: int, song_data: dict) -> bool:
     if not _pytgcalls:
         return False
     try:
-        from pytgcalls.types.input_stream import AudioPiped
-        from pytgcalls.types.input_stream.quality import HighQualityAudio
+        from pytgcalls.types import MediaStream
 
         audio_url = song_data.get("stream_url") or song_data.get("url", "")
         if not audio_url:
             return False
 
-        stream = AudioPiped(audio_url, HighQualityAudio())
+        stream = MediaStream(audio_url)
 
         try:
             active = await _pytgcalls.active_calls()
@@ -180,12 +178,3 @@ def get_now_playing(chat_id: int) -> Optional[dict]:
 
 def is_voice_available() -> bool:
     return _pytgcalls is not None
-```
-
-**Commit karo → Railway automatically redeploy karega.**
-
----
-
-Deploy hone ke baad Railway logs mein ye line aani chahiye:
-```
-✅ PyTgCalls voice streaming ready
