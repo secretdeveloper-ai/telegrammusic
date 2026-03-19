@@ -13,9 +13,10 @@ _now_playing: Dict[int, dict] = {}
 async def init_pytgcalls(pyrogram_client: Client):
     global _pytgcalls
     try:
-        import pytgcalls
-        logger.info(f"pytgcalls available: {dir(pytgcalls)}")
-        raise Exception("checking pytgcalls structure")
+        from pytgcalls import GroupCallFactory
+        _pytgcalls = GroupCallFactory(pyrogram_client).get_file_group_call()
+        logger.info("✅ PyTgCalls voice streaming ready")
+        return True
     except Exception as e:
         logger.error(f"PyTgCalls init failed: {e}")
         return False
@@ -53,25 +54,11 @@ async def _play_stream(chat_id: int, song_data: dict) -> bool:
     if not _pytgcalls:
         return False
     try:
-        from pytgcalls.types import MediaStream
-
         audio_url = song_data.get("stream_url") or song_data.get("url", "")
         if not audio_url:
             return False
 
-        stream = MediaStream(audio_url)
-
-        try:
-            active = await _pytgcalls.active_calls()
-            in_call = any(str(c) == str(chat_id) for c in active)
-        except Exception:
-            in_call = False
-
-        if in_call:
-            await _pytgcalls.change_stream(chat_id, stream)
-        else:
-            await _pytgcalls.join_group_call(chat_id, stream)
-
+        await _pytgcalls.start_audio(audio_url)
         _now_playing[chat_id] = song_data
         logger.info(f"▶️ Playing in {chat_id}: {song_data.get('title')}")
         return True
@@ -121,7 +108,7 @@ async def voice_skip(chat_id: int, song_data: dict = None) -> dict:
     if song_data:
         return await voice_play(chat_id, song_data.get("title", ""), song_data)
     try:
-        await _pytgcalls.leave_group_call(chat_id)
+        await _pytgcalls.stop()
         if chat_id in _now_playing:
             del _now_playing[chat_id]
         return {"success": True}
@@ -133,7 +120,7 @@ async def voice_leave(chat_id: int) -> bool:
     if not _pytgcalls:
         return False
     try:
-        await _pytgcalls.leave_group_call(chat_id)
+        await _pytgcalls.stop()
         if chat_id in _now_playing:
             del _now_playing[chat_id]
         return True
@@ -145,7 +132,7 @@ async def voice_pause(chat_id: int) -> bool:
     if not _pytgcalls:
         return False
     try:
-        await _pytgcalls.pause_stream(chat_id)
+        await _pytgcalls.pause()
         return True
     except Exception:
         return False
@@ -155,7 +142,7 @@ async def voice_resume(chat_id: int) -> bool:
     if not _pytgcalls:
         return False
     try:
-        await _pytgcalls.resume_stream(chat_id)
+        await _pytgcalls.resume()
         return True
     except Exception:
         return False
