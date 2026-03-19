@@ -1,6 +1,4 @@
 import yt_dlp
-import spotipy
-from spotipy.oauth2 import SpotifyClientCredentials
 from typing import Optional, Dict, List
 import logging
 
@@ -19,44 +17,57 @@ class MusicFetcher:
             "format": "bestaudio/best",
             "quiet": True,
             "no_warnings": True,
-            "default_search": "ytsearch",
             "socket_timeout": 30,
-            "extractor_args": {"youtube": {"skip": ["dash", "hls"]}},
+            "source_address": "0.0.0.0",
             "http_headers": {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "User-Agent": "com.google.android.youtube/17.36.4 (Linux; U; Android 12; GB) gzip",
                 "Accept-Language": "en-US,en;q=0.9",
+            },
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android"],
+                }
             },
         }
 
+        self.spotify_client = None
         if SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET:
-            auth_manager = SpotifyClientCredentials(
-                client_id=SPOTIFY_CLIENT_ID,
-                client_secret=SPOTIFY_CLIENT_SECRET
-            )
-            self.spotify_client = spotipy.Spotify(auth_manager=auth_manager)
+            try:
+                import spotipy
+                from spotipy.oauth2 import SpotifyClientCredentials
+                auth_manager = SpotifyClientCredentials(
+                    client_id=SPOTIFY_CLIENT_ID,
+                    client_secret=SPOTIFY_CLIENT_SECRET
+                )
+                self.spotify_client = spotipy.Spotify(auth_manager=auth_manager)
+                logger.info("Spotify client initialized")
+            except Exception as e:
+                logger.warning(f"Spotify init failed: {e}")
         else:
-            self.spotify_client = None
-            logger.warning("Spotify credentials not provided")
+            logger.warning("Spotify credentials not provided, skipping")
 
     async def search_youtube(self, query: str) -> Optional[Dict]:
         """Search and fetch song from YouTube"""
         try:
-            search_query = f"ytsearch:{query}"
+            search_query = f"ytsearch1:{query}"
             with yt_dlp.YoutubeDL(self.yt_dlp_opts) as ydl:
                 info = ydl.extract_info(search_query, download=False)
 
-                if "entries" in info:
+                if "entries" in info and info["entries"]:
                     info = info["entries"][0]
 
+                if not info:
+                    return None
+
                 duration = info.get("duration", 0)
-                if duration > MAX_SONG_DURATION:
+                if duration and duration > MAX_SONG_DURATION:
                     return None
 
                 return {
                     "title": info.get("title", "Unknown"),
                     "url": info.get("url", ""),
                     "webpage_url": info.get("webpage_url", ""),
-                    "duration": duration,
+                    "duration": duration or 0,
                     "thumbnail": info.get("thumbnail", ""),
                     "source": "YouTube",
                     "video_id": info.get("id", ""),
@@ -66,7 +77,7 @@ class MusicFetcher:
             return None
 
     async def search_spotify(self, query: str) -> Optional[Dict]:
-        """Search and fetch song from Spotify"""
+        """Search Spotify then fetch from YouTube"""
         if not self.spotify_client:
             return None
 
@@ -83,44 +94,25 @@ class MusicFetcher:
             if duration > MAX_SONG_DURATION:
                 return None
 
-            preview_url = track.get("preview_url")
-            if not preview_url:
-                artists = ", ".join([artist["name"] for artist in track.get("artists", [])])
-                youtube_result = await self.search_youtube(
-                    f"{track['name']} {artists}"
-                )
-                if youtube_result:
-                    return {
-                        **youtube_result,
-                        "source": "Spotify+YouTube",
-                        "spotify_id": track.get("id", ""),
-                    }
-                return None
+            artists = ", ".join([a["name"] for a in track.get("artists", [])])
+            song_name = f"{track['name']} {artists}"
 
-            return {
-                "title": f"{track['name']} - {', '.join([a['name'] for a in track['artists']])}",
-                "url": preview_url,
-                "duration": duration,
-                "thumbnail": track.get("album", {}).get("images", [{}])[0].get("url", ""),
-                "source": "Spotify",
-                "spotify_id": track.get("id", ""),
-            }
+            youtube_result = await self.search_youtube(song_name)
+            if youtube_result:
+                return {
+                    **youtube_result,
+                    "source": "Spotify+YouTube",
+                    "spotify_id": track.get("id", ""),
+                }
+            return None
+
         except Exception as e:
             logger.error(f"Spotify search error: {e}")
             return None
 
     async def search_music(self, query: str, source: str = "both") -> Optional[Dict]:
-        """Search music from specified source"""
-        if source == "youtube":
-            return await self.search_youtube(query)
-        elif source == "spotify":
-            return await self.search_spotify(query)
-        elif source == "both":
-            result = await self.search_spotify(query)
-            if not result:
-                result = await self.search_youtube(query)
-            return result
-        return None
+        """Search music - tries YouTube directly"""
+        return await self.search_youtube(query)
 
     async def get_playlist_youtube(self, playlist_url: str) -> List[Dict]:
         """Fetch multiple songs from YouTube playlist"""
@@ -134,35 +126,11 @@ class MusicFetcher:
                 songs = []
 
                 for entry in info.get("entries", [])[:20]:
-                    song_result = await self.search_youtube(entry.get("url"))
+                    song_result = await self.search_youtube(entry.get("url", ""))
                     if song_result:
                         songs.append(song_result)
 
                 return songs
         except Exception as e:
             logger.error(f"Playlist fetch error: {e}")
-            return []
-
-    async def get_playlist_spotify(self, playlist_url: str) -> List[Dict]:
-        """Fetch multiple songs from Spotify playlist"""
-        if not self.spotify_client:
-            return []
-
-        try:
-            playlist_id = playlist_url.split("/")[-1].split("?")[0]
-            results = self.spotify_client.playlist_tracks(playlist_id, limit=20)
-            songs = []
-
-            for item in results.get("items", []):
-                track = item.get("track")
-                if track:
-                    song_result = await self.search_spotify(
-                        f"{track['name']} {track['artists'][0]['name']}"
-                    )
-                    if song_result:
-                        songs.append(song_result)
-
-            return songs
-        except Exception as e:
-            logger.error(f"Spotify playlist error: {e}")
             return []
