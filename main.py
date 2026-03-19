@@ -152,8 +152,8 @@ def main():
         application.run_webhook(
             listen="0.0.0.0",
             port=WEBHOOK_PORT,
-            url_path=TELEGRAM_BOT_TOKEN,
-            webhook_url=f"{TELEGRAM_WEBHOOK_URL}/{TELEGRAM_BOT_TOKEN}",
+            url_path="",
+            webhook_url=TELEGRAM_WEBHOOK_URL,
         )
     else:
         logger.info("🔄 Starting with polling...")
