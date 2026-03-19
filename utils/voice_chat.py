@@ -13,7 +13,7 @@ _now_playing: Dict[int, dict] = {}
 async def init_pytgcalls(pyrogram_client: Client):
     global _pytgcalls
     try:
-        from pytgcalls import PyTgCalls
+        from pytgcalls import Client as PyTgCalls
         from pytgcalls.types import MediaStream
 
         _pytgcalls = PyTgCalls(pyrogram_client)
